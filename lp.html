@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>オーダーメイド業務ツール開発 | 会社・個人に最適化</title>
+    <meta
+      name="description"
+      content="会社・個人それぞれに合わせた、最も使いやすく成果につながる業務ツールをオーダーメイドで開発します。"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./lp.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="container header-inner">
+        <a class="logo" href="#top">Custom Tool Studio</a>
+        <nav class="nav">
+          <a href="#service">サービス内容</a>
+          <a href="#price">料金</a>
+          <a href="#flow">導入の流れ</a>
+          <a class="cta-mini contact-trigger" href="#contact">無料相談</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="container hero-grid">
+          <div>
+            <p class="badge">会社にも、個人にも、ぴったりの1本を。</p>
+            <h1>
+              「使いにくい」を終わらせる。<br />
+              あなた専用の業務ツールを、<br />
+              成果が出る形で作ります。
+            </h1>
+            <p class="lead">
+              現場・業種・運用体制に合わせて設計するから、導入後すぐに使える。
+              ただ作るだけでなく、実務で効果が出るところまで伴走します。
+            </p>
+            <div class="hero-actions">
+              <a class="btn btn-primary contact-trigger" href="#contact">無料で相談する</a>
+              <a class="btn btn-ghost" href="#service">サービスを見る</a>
+            </div>
+          </div>
+          <aside class="hero-card">
+            <h2>こんな課題に対応</h2>
+            <ul>
+              <li>Excel管理が限界</li>
+              <li>業務が属人化している</li>
+              <li>既存システムが使いづらい</li>
+              <li>必要機能だけを低コストで導入したい</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section section-soft" id="service">
+        <div class="container">
+          <h2 class="section-title">サービス内容</h2>
+          <p class="section-lead">
+            誰であっても、その会社・個人にとって一番使いやすく、効果のあるツールを作成します。
+          </p>
+          <div class="cards">
+            <article class="card">
+              <h3>業務に合わせた完全設計</h3>
+              <p>業種や現場フローをヒアリングし、必要機能だけに絞って構築。</p>
+            </article>
+            <article class="card">
+              <h3>UI/UX最適化</h3>
+              <p>使う人に合わせた画面設計で、操作ミスと教育コストを削減。</p>
+            </article>
+            <article class="card">
+              <h3>改善前提の運用支援</h3>
+              <p>導入後の利用状況を見ながら、改善・拡張まで継続サポート。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="screen">
+        <div class="container">
+          <h2 class="section-title">LINE入力がPCへ反映されるデモ</h2>
+          <p class="section-lead">
+            現場はスマホLINEで入力、管理側はPC帳票へ即時反映。同期の流れを視覚的に確認できます。
+          </p>
+          <div class="line-showcase">
+            <article class="line-device">
+              <div class="device-notch"></div>
+              <div class="device-body">
+                <div class="device-brand">LINE 日報入力</div>
+                <div class="device-field">
+                  <span>日付</span>
+                  <strong id="showDate">2026/03/13</strong>
+                </div>
+                <div class="device-field">
+                  <span>現場名</span>
+                  <strong id="showSite">渋谷オフィス空調更新</strong>
+                </div>
+                <div class="device-field">
+                  <span>作業時間</span>
+                  <strong id="showTime">8:30 - 17:30</strong>
+                </div>
+                <div class="device-field device-text">
+                  <span>作業内容</span>
+                  <p id="showTask">現場点検・写真提出・資材確認を実施</p>
+                </div>
+                <div class="device-send" id="showSend">LINE送信</div>
+              </div>
+            </article>
+
+            <div class="line-arrow" id="showArrow">▶</div>
+
+            <article class="sheet-stack">
+              <div class="sheet">
+                <h4>勤怠表</h4>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>日</th>
+                      <th>現場</th>
+                      <th>開始</th>
+                      <th>終了</th>
+                      <th>工数</th>
+                    </tr>
+                  </thead>
+                  <tbody id="showAttendance">
+                    <tr class="pulse-row">
+                      <td>13</td>
+                      <td>渋谷</td>
+                      <td>8:30</td>
+                      <td>17:30</td>
+                      <td>7.5</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="sheet">
+                <h4>出面表</h4>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>職長名</th>
+                      <th>累計工数</th>
+                      <th>本日</th>
+                      <th>原価</th>
+                    </tr>
+                  </thead>
+                  <tbody id="showLabor">
+                    <tr class="pulse-row">
+                      <td>現場A</td>
+                      <td>128</td>
+                      <td>2</td>
+                      <td>¥12,000</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="sync-note" id="showResult">PCツールへ反映済み</p>
+            </article>
+          </div>
+
+          <h3 class="section-subtitle">ツール全体デモ</h3>
+          <div class="demo-toolbar">
+            <button type="button" class="demo-btn active" data-demo-src="./index.html?v=12&demo=autoplay">
+              ツール全体デモ
+            </button>
+            <button type="button" class="demo-btn" data-demo-src="./index.html?v=12&demo=linesync">
+              LINE同期デモ
+            </button>
+            <button type="button" class="demo-btn" id="playDemoBtn">再開</button>
+            <button type="button" class="demo-btn" id="pauseDemoBtn">停止</button>
+            <button type="button" class="demo-btn" id="fullscreenDemoBtn">全画面表示</button>
+          </div>
+          <div class="screen-frame" id="demoFrameWrap">
+            <iframe
+              title="サービス画面デモ"
+              id="demoFrame"
+              src="./index.html?v=12&demo=autoplay"
+              allowfullscreen
+            ></iframe>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-soft" id="price">
+        <div class="container">
+          <h2 class="section-title">料金プラン</h2>
+          <div class="price-grid">
+            <article class="price-card">
+              <p>初期費用</p>
+              <h3>15万円</h3>
+            </article>
+            <article class="price-card">
+              <p>月額費用</p>
+              <h3>2万円〜</h3>
+              <small>ギガ・オプション・運用範囲により変動します</small>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="flow">
+        <div class="container">
+          <h2 class="section-title">導入の流れ</h2>
+          <ol class="flow">
+            <li>
+              <h3>1. ヒアリング</h3>
+              <p>現状業務・課題・理想の運用を整理します。</p>
+            </li>
+            <li>
+              <h3>2. 提案・要件設計</h3>
+              <p>必要機能と画面構成、実装スケジュールを提示します。</p>
+            </li>
+            <li>
+              <h3>3. 開発・確認</h3>
+              <p>試作を確認しながら、運用に合わせて仕上げます。</p>
+            </li>
+            <li>
+              <h3>4. 導入・運用開始</h3>
+              <p>導入後も改善提案・拡張サポートを継続します。</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+    </main>
+
+    <section class="contact" id="contact">
+      <div class="container contact-inner">
+        <div>
+          <p>無料相談受付中</p>
+          <h2>まずは「どんなツールが必要か」から一緒に整理します。</h2>
+        </div>
+        <a class="btn btn-primary contact-trigger" href="#">お問い合わせする</a>
+      </div>
+    </section>
+    <script>
+      document.querySelectorAll(".contact-trigger").forEach((el) => {
+        el.addEventListener("click", (e) => {
+          e.preventDefault();
+          window.alert("お問い合わせは company@sellyou.info にご連絡ください。");
+        });
+      });
+
+      const demoFrame = document.getElementById("demoFrame");
+      const demoWrap = document.getElementById("demoFrameWrap");
+      const postDemoControl = (action) => {
+        if (!demoFrame || !demoFrame.contentWindow) return;
+        demoFrame.contentWindow.postMessage({ type: "demo-control", action }, "*");
+      };
+
+      document.querySelectorAll(".demo-btn[data-demo-src]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".demo-btn").forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          demoFrame.src = btn.dataset.demoSrc;
+        });
+      });
+
+      document.getElementById("playDemoBtn").addEventListener("click", () => {
+        postDemoControl("start");
+      });
+      document.getElementById("pauseDemoBtn").addEventListener("click", () => {
+        postDemoControl("pause");
+      });
+
+      document.getElementById("fullscreenDemoBtn").addEventListener("click", async () => {
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+          return;
+        }
+        await demoWrap.requestFullscreen();
+      });
+
+      (function runLineShowcase() {
+        const samples = [
+          {
+            date: "2026/03/13",
+            site: "渋谷オフィス空調更新",
+            time: "8:30 - 17:30",
+            task: "現場点検・写真提出・資材確認を実施",
+            attendance: ["13", "渋谷", "8:30", "17:30", "7.5"],
+            labor: ["現場A", "128", "2", "¥12,000"],
+          },
+          {
+            date: "2026/03/14",
+            site: "品川ビル電気配線",
+            time: "9:00 - 18:00",
+            task: "配線ルート確認・施工内容を登録",
+            attendance: ["14", "品川", "9:00", "18:00", "8.0"],
+            labor: ["現場B", "134", "3", "¥18,000"],
+          },
+          {
+            date: "2026/03/15",
+            site: "大田倉庫照明交換",
+            time: "8:00 - 16:30",
+            task: "照明交換・完了写真をアップロード",
+            attendance: ["15", "大田", "8:00", "16:30", "7.0"],
+            labor: ["現場C", "142", "2", "¥9,000"],
+          },
+        ];
+
+        const date = document.getElementById("showDate");
+        const site = document.getElementById("showSite");
+        const time = document.getElementById("showTime");
+        const task = document.getElementById("showTask");
+        const send = document.getElementById("showSend");
+        const arrow = document.getElementById("showArrow");
+        const attendance = document.getElementById("showAttendance");
+        const labor = document.getElementById("showLabor");
+        const result = document.getElementById("showResult");
+        if (!date || !site || !time || !task || !send || !arrow || !attendance || !labor || !result) return;
+
+        let idx = 0;
+        setInterval(() => {
+          const s = samples[idx % samples.length];
+          date.textContent = s.date;
+          site.textContent = s.site;
+          time.textContent = s.time;
+          task.textContent = s.task;
+          send.classList.add("sending");
+          arrow.classList.add("moving");
+          result.textContent = "同期中...";
+          result.classList.remove("ok");
+
+          setTimeout(() => {
+            attendance.innerHTML = `<tr class="pulse-row"><td>${s.attendance[0]}</td><td>${s.attendance[1]}</td><td>${s.attendance[2]}</td><td>${s.attendance[3]}</td><td>${s.attendance[4]}</td></tr>`;
+            labor.innerHTML = `<tr class="pulse-row"><td>${s.labor[0]}</td><td>${s.labor[1]}</td><td>${s.labor[2]}</td><td>${s.labor[3]}</td></tr>`;
+            send.classList.remove("sending");
+            arrow.classList.remove("moving");
+            result.textContent = "PCツールへ反映済み";
+            result.classList.add("ok");
+          }, 1400);
+
+          idx += 1;
+        }, 6200);
+      })();
+    </script>
+  </body>
+</html>
