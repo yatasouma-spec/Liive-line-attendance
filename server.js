@@ -24,6 +24,14 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
 
   const payload = safeJsonParse(body.toString("utf8"), { events: [] });
   for (const event of payload.events || []) {
+    if (event.type === "follow") {
+      await sendLineReply(
+        event.replyToken,
+        "友だち追加ありがとうございます。下のボタンから勤怠打刻してください。",
+        { withQuickReply: true }
+      );
+      continue;
+    }
     if (event.type !== "message" || event.message?.type !== "text") continue;
     const userId = event.source?.userId || "unknown";
     const text = (event.message.text || "").trim();
@@ -31,15 +39,26 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     const employee = profile.employee || `LINE-${userId.slice(-4)}`;
     const site = profile.site || "LINE現場";
 
+    if (text === "メニュー" || text === "menu") {
+      await sendLineReply(event.replyToken, "勤怠メニューです。ボタンを押してください。", {
+        withQuickReply: true,
+      });
+      continue;
+    }
+
     const action = detectAction(text);
     if (!action) {
-      await sendLineReply(event.replyToken, "認識できませんでした。『出勤』『退勤』『休憩開始』『休憩終了』を送信してください。");
+      await sendLineReply(
+        event.replyToken,
+        "認識できませんでした。下のボタンから打刻してください。",
+        { withQuickReply: true }
+      );
       continue;
     }
 
     const snapshot = processLineAction({ employee, site, action, source: "LINE" });
     const msg = `受け付けました: ${employee} / ${site} / ${actionLabel(action)} (${snapshot.lineSync?.time || "-"})`;
-    await sendLineReply(event.replyToken, msg);
+    await sendLineReply(event.replyToken, msg, { withQuickReply: true });
   }
 
   res.json({ ok: true });
@@ -200,8 +219,33 @@ function verifyLineSignature(rawBody, signature) {
   return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
 }
 
-async function sendLineReply(replyToken, text) {
+function getAttendanceQuickReplyItems() {
+  return [
+    {
+      type: "action",
+      action: { type: "message", label: "出勤", text: "出勤" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "退勤", text: "退勤" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "休憩開始", text: "休憩開始" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "休憩終了", text: "休憩終了" },
+    },
+  ];
+}
+
+async function sendLineReply(replyToken, text, options = {}) {
   if (!LINE_CHANNEL_ACCESS_TOKEN || !replyToken) return;
+  const message = { type: "text", text };
+  if (options.withQuickReply) {
+    message.quickReply = { items: getAttendanceQuickReplyItems() };
+  }
   try {
     await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
@@ -211,7 +255,7 @@ async function sendLineReply(replyToken, text) {
       },
       body: JSON.stringify({
         replyToken,
-        messages: [{ type: "text", text }],
+        messages: [message],
       }),
     });
   } catch (_e) {}
