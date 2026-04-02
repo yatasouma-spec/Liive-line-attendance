@@ -7,6 +7,8 @@ const LINE_CHECKINS_KEY = "corecaLiteLineCheckinsV1";
 const COLLECTIONS_KEY = "corecaLiteCollectionsV1";
 const PERMITS_KEY = "corecaLitePermitsV1";
 const TIMECARD_KEY = "corecaLiteTimecardV1";
+const DIGITACHO_KEY = "corecaLiteDigitachoV1";
+const INVOICE_DRAFT_KEY = "corecaLiteInvoiceDraftV1";
 const API_POLL_MS = 5000;
 const API_ENABLED = window.location.protocol.startsWith("http");
 
@@ -162,6 +164,14 @@ function loadPermits() {
   return defaultPermits;
 }
 
+function loadDigitachoRecords() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DIGITACHO_KEY) || "null");
+    if (Array.isArray(parsed)) return parsed;
+  } catch (_e) {}
+  return [];
+}
+
 let projects = loadProjects();
 let nextProjectId = Math.max(...projects.map((p) => p.id), 0) + 1;
 let budgets = loadBudgets();
@@ -169,6 +179,7 @@ let shifts = loadShifts();
 let collections = loadCollections();
 let permits = loadPermits();
 let timecards = JSON.parse(localStorage.getItem(TIMECARD_KEY) || "[]");
+let digitachoRecords = loadDigitachoRecords();
 let nextShiftId = Math.max(...shifts.map((s) => s.id), 0) + 1;
 let nextCollectionId = Math.max(...collections.map((c) => c.id), 0) + 1;
 
@@ -182,15 +193,23 @@ const state = {
   budgetMonth: new Date().toISOString().slice(0, 7),
   lineSync: JSON.parse(localStorage.getItem(LINE_SYNC_KEY) || "null"),
   lineCheckins: JSON.parse(localStorage.getItem(LINE_CHECKINS_KEY) || "{}"),
+  lawCheckResult: null,
+  auditAlerts: [],
+  invoiceDraft: JSON.parse(localStorage.getItem(INVOICE_DRAFT_KEY) || "null"),
 };
 
 const viewTitle = {
   dashboard: "現場管理ダッシュボード",
   projects: "案件管理",
   operations: "産廃業務管理",
+  lawcheck: "法改正チェックAI",
+  docagent: "書類自動生成エージェント",
+  digitacho: "デジタコCSV連携",
+  auditalert: "監査前アラートAI",
   shift: "シフト管理（WBS）",
   daily: "LINE日報",
   report: "収支レポート",
+  invoice: "一括請求書作成",
 };
 
 const numberYen = new Intl.NumberFormat("ja-JP");
@@ -221,6 +240,14 @@ function savePermits() {
 
 function saveTimecards() {
   localStorage.setItem(TIMECARD_KEY, JSON.stringify(timecards));
+}
+
+function saveDigitachoRecords() {
+  localStorage.setItem(DIGITACHO_KEY, JSON.stringify(digitachoRecords));
+}
+
+function saveInvoiceDraft() {
+  localStorage.setItem(INVOICE_DRAFT_KEY, JSON.stringify(state.invoiceDraft || null));
 }
 
 async function apiRequest(path, options = {}) {
@@ -670,8 +697,84 @@ function renderOperations() {
   renderManifestTable();
   renderPermitAlerts();
   renderBillingPreview();
+  renderDigitachoSection();
+  renderLawCheckSection();
+  renderAuditAlertSection();
   saveCollections();
   savePermits();
+  saveDigitachoRecords();
+}
+
+function renderLawCheckSection() {
+  const list = document.getElementById("lawCheckResultList");
+  if (!list) return;
+  const result = state.lawCheckResult;
+  if (!result || !Array.isArray(result.tasks) || !result.tasks.length) {
+    list.innerHTML = "<li><p>「判定実行」で法改正対応タスクを表示します。</p></li>";
+    return;
+  }
+  list.innerHTML = result.tasks
+    .map((task) => {
+      const cls = task.level === "high" ? "danger" : task.level === "medium" ? "warn" : "ok";
+      return `<li class="permit-item ${cls}">
+        <strong>${task.title}</strong>
+        <p>${task.detail}</p>
+      </li>`;
+    })
+    .join("");
+}
+
+function renderDigitachoSection() {
+  const body = document.getElementById("digitachoBody");
+  const countEl = document.getElementById("digitachoCount");
+  const driveEl = document.getElementById("digitachoDriveHours");
+  const speedEl = document.getElementById("digitachoSpeedOver");
+  if (!body || !countEl || !driveEl || !speedEl) return;
+  const monthInput = document.getElementById("digitachoMonth");
+  const month = monthInput?.value || new Date().toISOString().slice(0, 7);
+  const rows = digitachoRecords.filter((row) => String(row.date || "").startsWith(month));
+  const totalDrive = rows.reduce((sum, row) => sum + Number(row.driveHours || 0), 0);
+  const totalSpeedOver = rows.reduce((sum, row) => sum + Number(row.speedOverCount || 0), 0);
+  countEl.textContent = `${rows.length}件`;
+  driveEl.textContent = `${totalDrive.toFixed(1)}h`;
+  speedEl.textContent = `${totalSpeedOver}件`;
+
+  if (!rows.length) {
+    body.innerHTML = `<tr><td class="empty" colspan="6">対象月のデジタコデータはありません</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows
+    .slice(-12)
+    .reverse()
+    .map(
+      (row) => `<tr>
+        <td>${row.date || "-"}</td>
+        <td>${row.driver || "-"}</td>
+        <td>${row.vehicle || "-"}</td>
+        <td>${Number(row.driveHours || 0).toFixed(1)}h</td>
+        <td>${Number(row.restHours || 0).toFixed(1)}h</td>
+        <td>${Number(row.speedOverCount || 0)}回</td>
+      </tr>`
+    )
+    .join("");
+}
+
+function renderAuditAlertSection() {
+  const list = document.getElementById("auditAlertList");
+  if (!list) return;
+  if (!Array.isArray(state.auditAlerts) || !state.auditAlerts.length) {
+    list.innerHTML = "<li><p>「点検実行」で監査前アラートを表示します。</p></li>";
+    return;
+  }
+  list.innerHTML = state.auditAlerts
+    .map((alert) => {
+      const cls = alert.level === "high" ? "danger" : alert.level === "medium" ? "warn" : "ok";
+      return `<li class="permit-item ${cls}">
+        <strong>${alert.title}</strong>
+        <p>${alert.detail}</p>
+      </li>`;
+    })
+    .join("");
 }
 
 function timecardStatusClass(record) {
@@ -983,11 +1086,143 @@ function renderAllProjectViews() {
   renderEmployeePerformance();
   renderCustomerAnalysis();
   renderBudgetManagement();
+  renderInvoicePage();
   renderOperations();
   renderTimecardSummary();
   renderShiftWbs();
   renderLineLinkedTables();
   saveProjects();
+}
+
+function formatMonthLabel(month) {
+  if (!month || !month.includes("-")) return "-";
+  const [year, m] = month.split("-");
+  return `${year}年${m}月`;
+}
+
+function formatDateLabel(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, "0")}月${String(d.getDate()).padStart(2, "0")}日`;
+}
+
+function getInvoiceCustomers() {
+  const fromProjects = projects.map((p) => p.customer).filter(Boolean);
+  const fromCollections = collections.map((c) => c.client).filter(Boolean);
+  return Array.from(new Set([...fromProjects, ...fromCollections])).sort((a, b) => a.localeCompare(b));
+}
+
+function generateInvoiceNo(month, company) {
+  const normalizedMonth = (month || new Date().toISOString().slice(0, 7)).replace("-", "");
+  const suffix = (company || "XX").replace(/\s+/g, "").slice(0, 4).toUpperCase();
+  return `INV-${normalizedMonth}-${suffix || "CUST"}`;
+}
+
+function collectInvoiceItems(company, month) {
+  const projectItems = projects
+    .filter((p) => p.customer === company && (p.dueDate || "").startsWith(month))
+    .map((p) => ({
+      item: p.name,
+      qty: 1,
+      unitPrice: Number(p.sales || 0),
+      amount: Number(p.sales || 0),
+      source: "project",
+    }));
+
+  const collectionRows = collections.filter((c) => c.client === company && (c.date || "").startsWith(month));
+  const grouped = new Map();
+  collectionRows.forEach((row) => {
+    const key = `${row.wasteType}|${row.unitPrice}`;
+    const prev = grouped.get(key) || { item: `${row.wasteType} 回収業務`, qty: 0, unitPrice: Number(row.unitPrice || 0), amount: 0, source: "collection" };
+    prev.qty += Number(row.volume || 0);
+    prev.amount += Number(row.volume || 0) * Number(row.unitPrice || 0);
+    grouped.set(key, prev);
+  });
+  const collectionItems = Array.from(grouped.values()).map((v) => ({
+    ...v,
+    qty: Number(v.qty.toFixed(1)),
+    amount: Math.round(v.amount),
+  }));
+
+  const merged = [...projectItems, ...collectionItems];
+  if (!merged.length) return [];
+  return merged;
+}
+
+function calcInvoiceTotals(items) {
+  const subtotal = items.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const tax = Math.round(subtotal * 0.1);
+  return { subtotal, tax, total: subtotal + tax };
+}
+
+function renderInvoicePage() {
+  const monthInput = document.getElementById("invoiceMonth");
+  const issueDateInput = document.getElementById("invoiceIssueDate");
+  const companyInput = document.getElementById("invoiceCompany");
+  const noInput = document.getElementById("invoiceNo");
+  const companyList = document.getElementById("invoiceCompanyList");
+  if (!monthInput || !issueDateInput || !companyInput || !noInput || !companyList) return;
+
+  const now = new Date();
+  const defaultMonth = now.toISOString().slice(0, 7);
+  const defaultDate = now.toISOString().slice(0, 10);
+  const customers = getInvoiceCustomers();
+  companyList.innerHTML = customers.map((name) => `<option value="${name}"></option>`).join("");
+
+  if (!state.invoiceDraft) {
+    state.invoiceDraft = {
+      month: defaultMonth,
+      issueDate: defaultDate,
+      company: customers[0] || "",
+      invoiceNo: "",
+      items: [],
+    };
+  }
+
+  const draft = state.invoiceDraft;
+  if (!draft.invoiceNo) {
+    draft.invoiceNo = generateInvoiceNo(draft.month || defaultMonth, draft.company || "");
+  }
+  monthInput.value = draft.month || defaultMonth;
+  issueDateInput.value = draft.issueDate || defaultDate;
+  companyInput.value = draft.company || "";
+  noInput.value = draft.invoiceNo || "";
+
+  const itemsBody = document.getElementById("invoiceItemsBody");
+  const previewNo = document.getElementById("invoicePreviewNo");
+  const previewIssueDate = document.getElementById("invoicePreviewIssueDate");
+  const previewMonth = document.getElementById("invoicePreviewMonth");
+  const previewCompany = document.getElementById("invoicePreviewCompany");
+  if (!itemsBody || !previewNo || !previewIssueDate || !previewMonth || !previewCompany) return;
+
+  const rows = Array.isArray(draft.items) ? draft.items : [];
+  if (!rows.length) {
+    itemsBody.innerHTML = `<tr><td class="empty" colspan="4">案件から自動生成してください</td></tr>`;
+    document.getElementById("invoiceSubTotal").textContent = "¥0";
+    document.getElementById("invoiceTax").textContent = "¥0";
+    document.getElementById("invoiceTotal").textContent = "¥0";
+  } else {
+    itemsBody.innerHTML = rows
+      .map(
+        (row) => `<tr>
+        <td>${row.item}</td>
+        <td>${row.qty}</td>
+        <td>${formatYen(Math.round(row.unitPrice || 0))}</td>
+        <td>${formatYen(Math.round(row.amount || 0))}</td>
+      </tr>`
+      )
+      .join("");
+    const totals = calcInvoiceTotals(rows);
+    document.getElementById("invoiceSubTotal").textContent = formatYen(totals.subtotal);
+    document.getElementById("invoiceTax").textContent = formatYen(totals.tax);
+    document.getElementById("invoiceTotal").textContent = formatYen(totals.total);
+  }
+  previewNo.textContent = `No: ${draft.invoiceNo || "-"}`;
+  previewIssueDate.textContent = formatDateLabel(draft.issueDate);
+  previewMonth.textContent = formatMonthLabel(draft.month);
+  previewCompany.textContent = `${draft.company || "請求先未設定"} 御中`;
+  saveInvoiceDraft();
 }
 
 function openProjectModal(mode, project = null) {
@@ -1146,6 +1381,24 @@ function createAndDownloadCsv(lines, filename) {
   URL.revokeObjectURL(link.href);
 }
 
+function downloadTextFile(text, filename) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsText(file, "utf-8");
+  });
+}
+
 function exportCollectionCsv() {
   const header = [
     "回収日",
@@ -1211,6 +1464,97 @@ function exportTimecardCsv() {
   createAndDownloadCsv([header, ...body], `coreca_line_attendance_${month}.csv`);
 }
 
+function exportInvoiceDetailCsv() {
+  const draft = state.invoiceDraft || {};
+  const rows = Array.isArray(draft.items) ? draft.items : [];
+  if (!rows.length) return;
+  const totals = calcInvoiceTotals(rows);
+  const header = ["請求書番号", "請求月", "請求先", "請求日", "明細", "数量", "単価", "金額"];
+  const body = rows.map((row) => [
+    draft.invoiceNo || "",
+    draft.month || "",
+    draft.company || "",
+    draft.issueDate || "",
+    row.item,
+    row.qty,
+    Math.round(row.unitPrice || 0),
+    Math.round(row.amount || 0),
+  ]);
+  body.push([
+    draft.invoiceNo || "",
+    draft.month || "",
+    draft.company || "",
+    draft.issueDate || "",
+    "合計（税込）",
+    "",
+    "",
+    totals.total,
+  ]);
+  createAndDownloadCsv([header, ...body], `liive_invoice_${draft.month || "month"}.csv`);
+}
+
+function exportBulkInvoiceCsv() {
+  const month = (document.getElementById("invoiceMonth")?.value || new Date().toISOString().slice(0, 7));
+  const issueDate = document.getElementById("invoiceIssueDate")?.value || new Date().toISOString().slice(0, 10);
+  const customers = getInvoiceCustomers();
+  const header = ["請求月", "請求日", "請求先", "請求書番号", "小計", "消費税", "合計"];
+  const body = [];
+  customers.forEach((company) => {
+    const items = collectInvoiceItems(company, month);
+    if (!items.length) return;
+    const totals = calcInvoiceTotals(items);
+    body.push([
+      month,
+      issueDate,
+      company,
+      generateInvoiceNo(month, company),
+      totals.subtotal,
+      totals.tax,
+      totals.total,
+    ]);
+  });
+  if (!body.length) return;
+  createAndDownloadCsv([header, ...body], `liive_invoice_bulk_${month}.csv`);
+}
+
+function printInvoiceSheet() {
+  const draft = state.invoiceDraft || {};
+  if (!Array.isArray(draft.items) || !draft.items.length) return;
+  const totals = calcInvoiceTotals(draft.items);
+  const lines = draft.items
+    .map(
+      (row) => `<tr><td>${row.item}</td><td>${row.qty}</td><td>${formatYen(Math.round(row.unitPrice || 0))}</td><td>${formatYen(Math.round(row.amount || 0))}</td></tr>`
+    )
+    .join("");
+  const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><title>請求書</title>
+  <style>
+  body{font-family:"Noto Sans JP",sans-serif;padding:24px;color:#1f2d3d;}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}
+  h1{margin:0;font-size:28px}
+  table{width:100%;border-collapse:collapse;margin-top:12px}
+  th,td{border:1px solid #d6e1ea;padding:8px;text-align:left}
+  .sum{margin-top:12px;display:grid;gap:6px;max-width:360px;margin-left:auto}
+  .sum p{display:flex;justify-content:space-between;margin:0}
+  </style></head><body>
+  <div class="head"><div><h1>請求書</h1><p>No: ${draft.invoiceNo || "-"}</p></div>
+  <div><p>請求日: ${formatDateLabel(draft.issueDate)}</p><p>請求月: ${formatMonthLabel(draft.month)}</p></div></div>
+  <p><strong>${draft.company || "請求先未設定"} 御中</strong></p>
+  <p>下記の通りご請求申し上げます。</p>
+  <table><thead><tr><th>案件/品目</th><th>数量</th><th>単価</th><th>金額</th></tr></thead><tbody>${lines}</tbody></table>
+  <div class="sum">
+    <p><span>小計</span><strong>${formatYen(totals.subtotal)}</strong></p>
+    <p><span>消費税(10%)</span><strong>${formatYen(totals.tax)}</strong></p>
+    <p><span>請求合計</span><strong>${formatYen(totals.total)}</strong></p>
+  </div>
+  <script>window.onload=()=>window.print();</script>
+  </body></html>`;
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
 function bindEvents() {
   document.querySelectorAll(".nav-link").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.view));
@@ -1241,6 +1585,11 @@ function bindEvents() {
     timecardMonth.value = new Date().toISOString().slice(0, 7);
     timecardMonth.addEventListener("change", renderTimecardSummary);
   }
+  const digitachoMonth = document.getElementById("digitachoMonth");
+  if (digitachoMonth) {
+    if (!digitachoMonth.value) digitachoMonth.value = new Date().toISOString().slice(0, 7);
+    digitachoMonth.addEventListener("change", renderDigitachoSection);
+  }
 
   document.getElementById("budgetMonth").addEventListener("change", (e) => {
     state.budgetMonth = e.target.value;
@@ -1253,6 +1602,54 @@ function bindEvents() {
     saveBudgets();
     renderBudgetManagement();
   });
+
+  const invoiceMonth = document.getElementById("invoiceMonth");
+  const invoiceIssueDate = document.getElementById("invoiceIssueDate");
+  const invoiceCompany = document.getElementById("invoiceCompany");
+  const invoiceNo = document.getElementById("invoiceNo");
+  const syncInvoiceDraft = () => {
+    if (!state.invoiceDraft) state.invoiceDraft = {};
+    state.invoiceDraft.month = invoiceMonth?.value || new Date().toISOString().slice(0, 7);
+    state.invoiceDraft.issueDate = invoiceIssueDate?.value || new Date().toISOString().slice(0, 10);
+    state.invoiceDraft.company = (invoiceCompany?.value || "").trim();
+    state.invoiceDraft.invoiceNo =
+      (invoiceNo?.value || "").trim() ||
+      generateInvoiceNo(state.invoiceDraft.month, state.invoiceDraft.company);
+    renderInvoicePage();
+  };
+  if (invoiceMonth) invoiceMonth.addEventListener("change", syncInvoiceDraft);
+  if (invoiceIssueDate) invoiceIssueDate.addEventListener("change", syncInvoiceDraft);
+  if (invoiceCompany) invoiceCompany.addEventListener("input", syncInvoiceDraft);
+  if (invoiceNo) invoiceNo.addEventListener("input", syncInvoiceDraft);
+
+  const generateInvoiceBtn = document.getElementById("generateInvoiceBtn");
+  if (generateInvoiceBtn) {
+    generateInvoiceBtn.addEventListener("click", () => {
+      if (!state.invoiceDraft) state.invoiceDraft = {};
+      const month = invoiceMonth?.value || new Date().toISOString().slice(0, 7);
+      const issueDate = invoiceIssueDate?.value || new Date().toISOString().slice(0, 10);
+      const company = (invoiceCompany?.value || "").trim();
+      if (!company) return;
+      const items = collectInvoiceItems(company, month);
+      state.invoiceDraft = {
+        month,
+        issueDate,
+        company,
+        invoiceNo: (invoiceNo?.value || "").trim() || generateInvoiceNo(month, company),
+        items,
+      };
+      renderInvoicePage();
+    });
+  }
+
+  const printInvoiceBtn = document.getElementById("printInvoiceBtn");
+  if (printInvoiceBtn) printInvoiceBtn.addEventListener("click", printInvoiceSheet);
+  const downloadInvoiceDetailCsvBtn = document.getElementById("downloadInvoiceDetailCsvBtn");
+  if (downloadInvoiceDetailCsvBtn) {
+    downloadInvoiceDetailCsvBtn.addEventListener("click", exportInvoiceDetailCsv);
+  }
+  const bulkInvoiceCsvBtn = document.getElementById("bulkInvoiceCsvBtn");
+  if (bulkInvoiceCsvBtn) bulkInvoiceCsvBtn.addEventListener("click", exportBulkInvoiceCsv);
 
   const collectionForm = document.getElementById("collectionForm");
   if (collectionForm) {
@@ -1304,6 +1701,102 @@ function bindEvents() {
       document.getElementById("colUnitPrice").value = "22000";
       document.getElementById("colDisposalCost").value = "12000";
       renderAllProjectViews();
+    });
+  }
+
+  const runLawCheckBtn = document.getElementById("runLawCheckBtn");
+  if (runLawCheckBtn) {
+    runLawCheckBtn.addEventListener("click", async () => {
+      const payload = {
+        companyName: document.getElementById("lawCompanyName")?.value?.trim() || "未入力企業",
+        fleetSize: Number(document.getElementById("lawFleetSize")?.value || 0),
+        driverCount: Number(document.getElementById("lawDriverCount")?.value || 0),
+        overtimeAvg: Number(document.getElementById("lawOvertimeAvg")?.value || 0),
+        useSubcontract: Boolean(document.getElementById("lawUseSubcontract")?.checked),
+        hasGreenPlate: Boolean(document.getElementById("lawHasGreenPlate")?.checked),
+        hasDigitacho: Boolean(document.getElementById("lawHasDigitacho")?.checked),
+        hasIndustrialWaste: Boolean(document.getElementById("lawHasIndustrialWaste")?.checked),
+      };
+      try {
+        const data = await apiRequest("/api/compliance/check", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (data && data.ok) {
+          state.lawCheckResult = data;
+          renderLawCheckSection();
+        }
+      } catch (_e) {}
+    });
+  }
+
+  const generateDocsBtn = document.getElementById("generateDocsBtn");
+  if (generateDocsBtn) {
+    generateDocsBtn.addEventListener("click", async () => {
+      const docTypes = Array.from(document.querySelectorAll(".doc-type:checked")).map((el) => el.value);
+      const payload = {
+        companyName: document.getElementById("lawCompanyName")?.value?.trim() || "未入力企業",
+        fleetSize: Number(document.getElementById("lawFleetSize")?.value || 0),
+        driverCount: Number(document.getElementById("lawDriverCount")?.value || 0),
+        docTypes,
+      };
+      try {
+        const data = await apiRequest("/api/compliance/generate-docs", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (data && data.ok) {
+          const box = document.getElementById("generatedDocText");
+          if (box) box.value = data.text || "";
+        }
+      } catch (_e) {}
+    });
+  }
+
+  const downloadGeneratedDocBtn = document.getElementById("downloadGeneratedDocBtn");
+  if (downloadGeneratedDocBtn) {
+    downloadGeneratedDocBtn.addEventListener("click", () => {
+      const text = document.getElementById("generatedDocText")?.value || "";
+      if (!text.trim()) return;
+      downloadTextFile(text, `liive_document_${new Date().toISOString().slice(0, 10)}.txt`);
+    });
+  }
+
+  const importDigitachoBtn = document.getElementById("importDigitachoBtn");
+  if (importDigitachoBtn) {
+    importDigitachoBtn.addEventListener("click", async () => {
+      const fileInput = document.getElementById("digitachoCsvFile");
+      if (!(fileInput instanceof HTMLInputElement) || !fileInput.files || !fileInput.files[0]) return;
+      const csvText = await readFileAsText(fileInput.files[0]);
+      if (!csvText.trim()) return;
+      try {
+        const data = await apiRequest("/api/digitacho/import", {
+          method: "POST",
+          body: JSON.stringify({ csvText }),
+        });
+        if (data && data.ok && Array.isArray(data.rows)) {
+          digitachoRecords = data.rows;
+          saveDigitachoRecords();
+          renderDigitachoSection();
+        }
+      } catch (_e) {}
+    });
+  }
+
+  const runAuditAlertBtn = document.getElementById("runAuditAlertBtn");
+  if (runAuditAlertBtn) {
+    runAuditAlertBtn.addEventListener("click", async () => {
+      const payload = { permits, timecards, digitacho: digitachoRecords, collections };
+      try {
+        const data = await apiRequest("/api/compliance/audit-alerts", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (data && data.ok && Array.isArray(data.alerts)) {
+          state.auditAlerts = data.alerts;
+          renderAuditAlertSection();
+        }
+      } catch (_e) {}
     });
   }
 

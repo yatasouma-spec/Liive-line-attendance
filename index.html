@@ -22,9 +22,14 @@
           </button>
           <button type="button" class="nav-link" data-view="projects"><span class="nav-ico">🗂</span>案件管理</button>
           <button type="button" class="nav-link" data-view="operations"><span class="nav-ico">♻</span>産廃業務</button>
+          <button type="button" class="nav-link" data-view="lawcheck"><span class="nav-ico">⚖</span>法改正チェックAI</button>
+          <button type="button" class="nav-link" data-view="docagent"><span class="nav-ico">📄</span>書類自動生成</button>
+          <button type="button" class="nav-link" data-view="digitacho"><span class="nav-ico">🚛</span>デジタコ連携</button>
+          <button type="button" class="nav-link" data-view="auditalert"><span class="nav-ico">🔎</span>監査前アラート</button>
           <button type="button" class="nav-link" data-view="shift"><span class="nav-ico">📅</span>シフト管理</button>
           <button type="button" class="nav-link" data-view="daily"><span class="nav-ico">📝</span>LINE日報</button>
           <button type="button" class="nav-link" data-view="report"><span class="nav-ico">◎</span>収支レポート</button>
+          <button type="button" class="nav-link" data-view="invoice"><span class="nav-ico">🧾</span>請求書作成</button>
         </nav>
       </aside>
 
@@ -245,6 +250,104 @@
                 <button type="button" class="btn" id="downloadInvoiceCsvBtn">請求CSVを生成</button>
               </div>
             </article>
+          </section>
+
+          <section class="panel">
+            <h2>法改正BPO機能メニュー</h2>
+            <p class="section-lead">機能を分割しました。左メニューから「法改正チェックAI」「書類自動生成」「デジタコ連携」「監査前アラート」を選択してください。</p>
+          </section>
+        </section>
+
+        <section class="view" data-view="lawcheck">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>法改正チェックAI（2024/2025/2026対応）</h2>
+              <button type="button" class="btn btn-ghost" id="runLawCheckBtn">判定実行</button>
+            </div>
+            <form id="lawCheckForm" class="daily-form">
+              <div class="form-row">
+                <label>会社名<input id="lawCompanyName" type="text" placeholder="例: 株式会社Liive運輸" /></label>
+                <label>車両台数<input id="lawFleetSize" type="number" min="1" value="12" /></label>
+              </div>
+              <div class="form-row">
+                <label>ドライバー人数<input id="lawDriverCount" type="number" min="1" value="18" /></label>
+                <label>月間平均残業時間(1人あたりh)<input id="lawOvertimeAvg" type="number" min="0" step="0.5" value="32" /></label>
+              </div>
+              <div class="form-row checks-row">
+                <label><input id="lawUseSubcontract" type="checkbox" checked /> 協力会社へ再委託がある</label>
+                <label><input id="lawHasGreenPlate" type="checkbox" checked /> 緑ナンバー運行である</label>
+                <label><input id="lawHasDigitacho" type="checkbox" checked /> デジタコ導入済み</label>
+                <label><input id="lawHasIndustrialWaste" type="checkbox" checked /> 産廃収集運搬を行う</label>
+              </div>
+            </form>
+            <ul class="log-list" id="lawCheckResultList">
+              <li><p>「判定実行」で法改正対応タスクを表示します。</p></li>
+            </ul>
+          </section>
+        </section>
+
+        <section class="view" data-view="docagent">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>書類自動生成エージェント</h2>
+              <button type="button" class="btn btn-ghost" id="generateDocsBtn">書類生成</button>
+            </div>
+            <div class="form-row checks-row">
+              <label><input class="doc-type" type="checkbox" value="contract" checked /> 運送契約書面</label>
+              <label><input class="doc-type" type="checkbox" value="operationRule" checked /> 運送利用管理規程</label>
+              <label><input class="doc-type" type="checkbox" value="actualCarrierLedger" checked /> 実運送体制管理簿</label>
+              <label><input class="doc-type" type="checkbox" value="wasteChecklist" checked /> 産廃携行書類チェック</label>
+            </div>
+            <textarea id="generatedDocText" rows="12" placeholder="ここに自動生成結果が表示されます"></textarea>
+            <div class="modal-actions">
+              <button type="button" class="btn" id="downloadGeneratedDocBtn">TXT保存</button>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="digitacho">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>デジタコCSV取込（CSV先行）</h2>
+              <button type="button" class="btn btn-ghost" id="importDigitachoBtn">取込実行</button>
+            </div>
+            <div class="form-row">
+              <label>CSVファイル<input id="digitachoCsvFile" type="file" accept=".csv,text/csv" /></label>
+              <label>対象月<input id="digitachoMonth" type="month" /></label>
+            </div>
+            <ul class="status-list">
+              <li><span>取込件数</span><strong id="digitachoCount">0件</strong></li>
+              <li><span>総運転時間</span><strong id="digitachoDriveHours">0h</strong></li>
+              <li><span>速度超過検知</span><strong id="digitachoSpeedOver">0件</strong></li>
+            </ul>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>日付</th>
+                    <th>運転者</th>
+                    <th>車両</th>
+                    <th>運転時間</th>
+                    <th>休息時間</th>
+                    <th>速度超過</th>
+                  </tr>
+                </thead>
+                <tbody id="digitachoBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="auditalert">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>監査前アラートAI</h2>
+              <button type="button" class="btn btn-ghost" id="runAuditAlertBtn">点検実行</button>
+            </div>
+            <p class="section-lead">許可期限・勤怠・デジタコを横断し、監査前に不足/異常を抽出します。</p>
+            <ul class="log-list" id="auditAlertList">
+              <li><p>「点検実行」で監査前アラートを表示します。</p></li>
+            </ul>
           </section>
         </section>
 
@@ -564,6 +667,77 @@
                   <tbody id="customerAnalysisBody"></tbody>
                 </table>
               </div>
+            </article>
+          </section>
+        </section>
+
+        <section class="view" data-view="invoice">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>一括請求書作成</h2>
+              <div class="filters">
+                <button type="button" class="btn btn-ghost" id="bulkInvoiceCsvBtn">全社分CSV出力</button>
+              </div>
+            </div>
+            <form id="invoiceForm" class="daily-form">
+              <div class="form-row">
+                <label>請求月（自動入力）
+                  <input id="invoiceMonth" type="month" />
+                </label>
+                <label>請求日
+                  <input id="invoiceIssueDate" type="date" />
+                </label>
+              </div>
+              <div class="form-row">
+                <label>請求先会社名
+                  <input id="invoiceCompany" type="text" list="invoiceCompanyList" placeholder="例: 品川産業" />
+                  <datalist id="invoiceCompanyList"></datalist>
+                </label>
+                <label>請求書番号
+                  <input id="invoiceNo" type="text" placeholder="自動生成されます" />
+                </label>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn" id="generateInvoiceBtn">案件から自動生成</button>
+                <button type="button" class="btn btn-ghost" id="printInvoiceBtn">請求書を印刷</button>
+                <button type="button" class="btn btn-ghost" id="downloadInvoiceDetailCsvBtn">明細CSV出力</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <h2>請求書プレビュー</h2>
+            <article class="invoice-sheet" id="invoiceSheet">
+              <header class="invoice-head">
+                <div>
+                  <h3>請求書</h3>
+                  <p id="invoicePreviewNo">No: -</p>
+                </div>
+                <div class="invoice-meta">
+                  <p>請求日: <span id="invoicePreviewIssueDate">-</span></p>
+                  <p>請求月: <span id="invoicePreviewMonth">-</span></p>
+                </div>
+              </header>
+              <p class="invoice-company"><strong id="invoicePreviewCompany">御中</strong></p>
+              <p class="section-lead">下記の通りご請求申し上げます。</p>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>案件/品目</th>
+                      <th>数量</th>
+                      <th>単価</th>
+                      <th>金額</th>
+                    </tr>
+                  </thead>
+                  <tbody id="invoiceItemsBody"></tbody>
+                </table>
+              </div>
+              <ul class="status-list invoice-summary">
+                <li><span>小計</span><strong id="invoiceSubTotal">¥0</strong></li>
+                <li><span>消費税(10%)</span><strong id="invoiceTax">¥0</strong></li>
+                <li><span>請求合計</span><strong id="invoiceTotal">¥0</strong></li>
+              </ul>
             </article>
           </section>
         </section>

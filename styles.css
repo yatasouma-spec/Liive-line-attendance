@@ -943,6 +943,60 @@ body {
   margin-top: 4px;
 }
 
+.checks-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.checks-row label {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #344b67;
+  font-size: 0.9rem;
+}
+
+#generatedDocText {
+  margin-top: 10px;
+  min-height: 220px;
+  resize: vertical;
+}
+
+.invoice-sheet {
+  border: 1px solid #d7e3ee;
+  border-radius: 12px;
+  padding: 18px;
+  background: #fbfdff;
+}
+
+.invoice-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.invoice-head h3 {
+  margin: 0 0 4px;
+  font-size: 1.45rem;
+  color: #17345f;
+}
+
+.invoice-head p {
+  margin: 2px 0;
+}
+
+.invoice-company {
+  margin: 12px 0 6px;
+  font-size: 1rem;
+}
+
+.invoice-summary {
+  margin-top: 12px;
+}
+
 .nav-link {
   border: 1px solid transparent;
 }

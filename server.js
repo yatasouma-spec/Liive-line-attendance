@@ -92,6 +92,34 @@ app.post("/api/line-action", (req, res) => {
   res.json({ ok: true, snapshot });
 });
 
+app.post("/api/compliance/check", (req, res) => {
+  const payload = req.body || {};
+  const result = buildComplianceChecklist(payload);
+  res.json({ ok: true, ...result });
+});
+
+app.post("/api/compliance/generate-docs", (req, res) => {
+  const payload = req.body || {};
+  const text = generateComplianceDocs(payload);
+  res.json({ ok: true, text });
+});
+
+app.post("/api/digitacho/import", (req, res) => {
+  const csvText = String(req.body?.csvText || "");
+  if (!csvText.trim()) {
+    return res.status(400).json({ ok: false, error: "csvText is required" });
+  }
+  const rows = parseDigitachoCsv(csvText);
+  const summary = summarizeDigitacho(rows);
+  res.json({ ok: true, rows, summary });
+});
+
+app.post("/api/compliance/audit-alerts", (req, res) => {
+  const payload = req.body || {};
+  const alerts = buildAuditAlerts(payload);
+  res.json({ ok: true, alerts });
+});
+
 app.use(express.static(ROOT_DIR));
 
 app.listen(PORT, () => {
@@ -292,4 +320,290 @@ function safeJsonParse(text, fallback) {
   } catch (_e) {
     return fallback;
   }
+}
+
+function buildComplianceChecklist(payload) {
+  const companyName = String(payload.companyName || "対象企業");
+  const fleetSize = Number(payload.fleetSize || 0);
+  const driverCount = Number(payload.driverCount || 0);
+  const overtimeAvg = Number(payload.overtimeAvg || 0);
+  const useSubcontract = Boolean(payload.useSubcontract);
+  const hasGreenPlate = Boolean(payload.hasGreenPlate);
+  const hasDigitacho = Boolean(payload.hasDigitacho);
+  const hasIndustrialWaste = Boolean(payload.hasIndustrialWaste);
+  const tasks = [];
+
+  tasks.push({
+    level: "high",
+    title: "2024年基準: 改善基準告示の運用点検",
+    detail: `ドライバー${driverCount || "未入力"}名の拘束時間・休息時間・時間外上限運用を月次点検し、逸脱時の是正フローを記録化します。`,
+  });
+
+  if (overtimeAvg >= 45) {
+    tasks.push({
+      level: "high",
+      title: "時間外労働リスク対応",
+      detail: `月間平均残業が${overtimeAvg}hのため、36協定範囲・業務再配分・運行計画見直しを優先実施してください。`,
+    });
+  }
+
+  tasks.push({
+    level: "high",
+    title: "2025年改正対応: 運送契約時の書面整備",
+    detail: "運送の対価・運送内容・責任分界など、契約時書面交付の実務テンプレートを統一し保存運用を固定化します。",
+  });
+
+  if (useSubcontract) {
+    tasks.push({
+      level: "high",
+      title: "実運送体制管理簿の整備",
+      detail: "再委託/協力会社があるため、実運送体制管理簿の記録・更新・保管ルールを標準化してください。",
+    });
+  }
+
+  if (!hasGreenPlate) {
+    tasks.push({
+      level: "high",
+      title: "緑ナンバー運行体制の再確認",
+      detail: "一般貨物運送に該当する運行形態で許可/車両要件が不足すると重大リスクです。許可・運行区分を至急点検してください。",
+    });
+  }
+
+  if (hasIndustrialWaste) {
+    tasks.push({
+      level: "medium",
+      title: "産廃収集運搬の携行書類・表示点検",
+      detail: "許可証写し、委託契約、マニフェスト運用、車両表示の整合を月次で確認し、監査用フォルダへ集約します。",
+    });
+  }
+
+  if (!hasDigitacho) {
+    tasks.push({
+      level: "medium",
+      title: "デジタコ導入準備",
+      detail: "運行実績を定量管理するため、CSV出力可能なデジタコまたは同等データ取得手段を導入してください。",
+    });
+  } else {
+    tasks.push({
+      level: "low",
+      title: "デジタコCSV定期連携",
+      detail: "週次でCSV取込し、速度超過・休息不足・稼働偏りの監査前チェックを自動化します。",
+    });
+  }
+
+  if (fleetSize >= 10) {
+    tasks.push({
+      level: "medium",
+      title: "管理責任体制の明確化",
+      detail: `車両台数${fleetSize}台規模のため、運行管理責任・点検記録責任・監査窓口責任を文書で明確化してください。`,
+    });
+  }
+
+  return {
+    companyName,
+    riskScore: Math.min(
+      100,
+      (overtimeAvg >= 45 ? 25 : 10) +
+        (useSubcontract ? 20 : 10) +
+        (!hasGreenPlate ? 30 : 10) +
+        (hasIndustrialWaste ? 20 : 5) +
+        (hasDigitacho ? 5 : 20)
+    ),
+    tasks,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function generateComplianceDocs(payload) {
+  const companyName = String(payload.companyName || "株式会社〇〇");
+  const fleetSize = Number(payload.fleetSize || 0);
+  const driverCount = Number(payload.driverCount || 0);
+  const selected = Array.isArray(payload.docTypes) ? payload.docTypes : [];
+  const now = new Date().toISOString().slice(0, 10);
+  const sections = [];
+
+  if (selected.includes("contract")) {
+    sections.push(
+      `【運送契約書面（ひな形）】\n作成日: ${now}\n対象会社: ${companyName}\n` +
+        `1. 運送区間/荷姿/重量\n2. 対価・支払条件\n3. 再委託の有無と責任分界\n4. 事故・遅延時対応\n5. 記録保存期間\n`
+    );
+  }
+  if (selected.includes("operationRule")) {
+    sections.push(
+      `【運送利用管理規程（案）】\n作成日: ${now}\n対象会社: ${companyName}\n` +
+        `- 適用範囲: 全${fleetSize || "未設定"}台\n- 管理責任者: 運行管理責任者\n- 月次点検項目: 勤怠、運行時間、休息、契約書面、管理簿\n- 監査前点検: 毎月末営業日\n`
+    );
+  }
+  if (selected.includes("actualCarrierLedger")) {
+    sections.push(
+      `【実運送体制管理簿（入力項目）】\n作成日: ${now}\n対象会社: ${companyName}\n` +
+        `列定義: 日付 / 元請案件ID / 実運送会社 / 車番 / 運転者 / 開始時刻 / 終了時刻 / 備考\n`
+    );
+  }
+  if (selected.includes("wasteChecklist")) {
+    sections.push(
+      `【産廃携行書類チェックリスト】\n作成日: ${now}\n対象会社: ${companyName}\n` +
+        `1. 許可証写し携行\n2. 委託契約書の整備\n3. マニフェスト照合\n4. 車両表示の適正\n5. ドライバー教育記録\n` +
+        `想定運用人数: ${driverCount || "未設定"}名\n`
+    );
+  }
+
+  const body = sections.join("\n------------------------------\n\n");
+  return (
+    `Liive 書類自動生成エージェント\n会社名: ${companyName}\n生成日時: ${new Date().toLocaleString("ja-JP")}\n\n` +
+    (body || "※書類タイプが未選択です。")
+  );
+}
+
+function parseDigitachoCsv(csvText) {
+  const lines = csvText.split(/\r?\n/).filter((line) => line.trim());
+  if (!lines.length) return [];
+  const headers = parseCsvLine(lines[0]).map((h) => h.trim());
+  const rows = [];
+
+  for (let i = 1; i < lines.length; i += 1) {
+    const cols = parseCsvLine(lines[i]);
+    if (!cols.length) continue;
+    const row = {};
+    headers.forEach((h, idx) => {
+      row[h] = (cols[idx] || "").trim();
+    });
+    const normalized = normalizeDigitachoRow(row);
+    if (normalized) rows.push(normalized);
+  }
+  return rows;
+}
+
+function parseCsvLine(line) {
+  const out = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      out.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  out.push(current);
+  return out;
+}
+
+function normalizeDigitachoRow(row) {
+  const get = (...keys) => {
+    for (const key of keys) {
+      if (row[key] !== undefined) return row[key];
+    }
+    return "";
+  };
+  const date = get("date", "日付");
+  const driver = get("driver", "運転者", "社員");
+  const vehicle = get("vehicle", "車両");
+  const driveHours = Number(get("drive_hours", "運転時間", "driveHours", "稼働時間") || 0);
+  const restHours = Number(get("rest_hours", "休息時間", "restHours", "休憩時間") || 0);
+  const speedOverCount = Number(get("speed_over_count", "速度超過回数", "speedOverCount") || 0);
+  if (!date || !driver) return null;
+  return {
+    date,
+    driver,
+    vehicle: vehicle || "-",
+    driveHours: Number.isFinite(driveHours) ? driveHours : 0,
+    restHours: Number.isFinite(restHours) ? restHours : 0,
+    speedOverCount: Number.isFinite(speedOverCount) ? speedOverCount : 0,
+  };
+}
+
+function summarizeDigitacho(rows) {
+  return {
+    count: rows.length,
+    totalDriveHours: Number(rows.reduce((sum, row) => sum + row.driveHours, 0).toFixed(1)),
+    speedOverTotal: rows.reduce((sum, row) => sum + row.speedOverCount, 0),
+  };
+}
+
+function buildAuditAlerts(payload) {
+  const permits = Array.isArray(payload.permits) ? payload.permits : [];
+  const timecards = Array.isArray(payload.timecards) ? payload.timecards : [];
+  const digitacho = Array.isArray(payload.digitacho) ? payload.digitacho : [];
+  const alerts = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (const permit of permits) {
+    if (!permit.expiry) continue;
+    const expiry = new Date(permit.expiry);
+    if (Number.isNaN(expiry.getTime())) continue;
+    const diff = Math.ceil((expiry.getTime() - today.getTime()) / 86400000);
+    if (diff <= 30) {
+      alerts.push({
+        level: diff < 0 ? "high" : "medium",
+        title: `許可期限アラート: ${permit.name}`,
+        detail: diff < 0 ? `${Math.abs(diff)}日超過` : `残り${diff}日`,
+      });
+    }
+  }
+
+  const overtimeByEmployee = new Map();
+  for (const row of timecards) {
+    const key = row.employee || "未設定";
+    overtimeByEmployee.set(key, (overtimeByEmployee.get(key) || 0) + Number(row.overtime || 0));
+  }
+  for (const [employee, overtime] of overtimeByEmployee.entries()) {
+    if (overtime > 45) {
+      alerts.push({
+        level: "high",
+        title: `勤怠アラート: ${employee}`,
+        detail: `月間残業 ${overtime.toFixed(1)}h（45h超）`,
+      });
+    } else if (overtime > 30) {
+      alerts.push({
+        level: "medium",
+        title: `勤怠注意: ${employee}`,
+        detail: `月間残業 ${overtime.toFixed(1)}h`,
+      });
+    }
+  }
+
+  for (const row of digitacho) {
+    if (row.driveHours > 9) {
+      alerts.push({
+        level: "medium",
+        title: `運転時間超過疑義: ${row.driver} ${row.date}`,
+        detail: `運転時間 ${row.driveHours}h`,
+      });
+    }
+    if (row.restHours > 0 && row.restHours < 9) {
+      alerts.push({
+        level: "medium",
+        title: `休息不足疑義: ${row.driver} ${row.date}`,
+        detail: `休息時間 ${row.restHours}h`,
+      });
+    }
+    if (row.speedOverCount >= 3) {
+      alerts.push({
+        level: "high",
+        title: `速度超過多発: ${row.driver} ${row.date}`,
+        detail: `速度超過 ${row.speedOverCount}回`,
+      });
+    }
+  }
+
+  if (!alerts.length) {
+    alerts.push({
+      level: "low",
+      title: "監査前アラートなし",
+      detail: "現時点で重大な不足は検知されていません。",
+    });
+  }
+
+  return alerts.slice(0, 30);
 }
