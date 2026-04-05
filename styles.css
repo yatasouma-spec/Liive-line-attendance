@@ -161,6 +161,34 @@ body {
   min-width: 0;
 }
 
+.shift-form {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 0.8fr 0.8fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.punch-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.closing-box {
+  margin: 10px 0 12px;
+  border: 1px solid #d8e4f1;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.closing-box h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
 input,
 select,
 textarea,
@@ -353,6 +381,10 @@ th {
   }
 
   .master-form {
+    grid-template-columns: 1fr;
+  }
+
+  .shift-form {
     grid-template-columns: 1fr;
   }
 

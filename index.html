@@ -22,7 +22,7 @@
           <button type="button" class="nav-link" data-view="punch">打刻（LINE）</button>
           <button type="button" class="nav-link" data-view="records">勤怠履歴</button>
           <button type="button" class="nav-link" data-view="summary">月次集計</button>
-          <button type="button" class="nav-link" data-view="masters">管理設定（社員・ルート）</button>
+          <button type="button" class="nav-link" data-view="masters">管理設定（社員/ルート/車両/シフト）</button>
         </nav>
       </aside>
 
@@ -115,6 +115,10 @@
                 <select id="lineSite"></select>
               </label>
             </div>
+            <div class="punch-meta">
+              <button type="button" class="btn btn-ghost" id="captureGpsBtn">現在地を取得（GPS）</button>
+              <p id="gpsStatus" class="section-lead">GPS: 未取得</p>
+            </div>
 
             <div class="big-button-grid">
               <button type="button" class="big-btn checkin" id="lineCheckInBtn">出勤</button>
@@ -178,11 +182,18 @@
                 <select id="csvTemplate">
                   <option value="standard_monthly">標準（社員月次）</option>
                   <option value="freee_daily">freee連携向け（日次明細）</option>
+                  <option value="jobcan_payroll">ジョブカン取込向け</option>
+                  <option value="yayoi_payroll">弥生給与向け</option>
                 </select>
                 <button type="button" class="btn" id="toggleMonthLockBtn">この月をロック</button>
+                <button type="button" class="btn btn-ghost" id="downloadAuditPackageBtn">監査提出レポート一括</button>
               </div>
             </div>
             <p class="section-lead" id="monthLockStatus">未ロック</p>
+            <div class="closing-box">
+              <h3>締め処理チェック</h3>
+              <ul id="closingChecklist" class="log-list"></ul>
+            </div>
             <ul class="status-list">
               <li><span>対象社員</span><strong id="summaryMembers">0名</strong></li>
               <li><span>総労働時間</span><strong id="summaryHours">0h</strong></li>
@@ -199,6 +210,7 @@
                     <th>休憩時間</th>
                     <th>残業時間</th>
                     <th>遅刻回数</th>
+                    <th>シフト差分</th>
                     <th>ステータス</th>
                   </tr>
                 </thead>
@@ -251,6 +263,75 @@
                 </table>
               </div>
             </article>
+          </section>
+          <section class="grid-2">
+            <article class="panel">
+              <h2>車両マスタ管理</h2>
+              <form id="vehicleForm" class="master-form">
+                <input id="vehiclePlate" type="text" placeholder="車両番号 例: 品川500 あ 12-34" required />
+                <input id="vehicleName" type="text" placeholder="車両名 例: 2tパッカーA" required />
+                <button type="submit" class="btn">車両を追加</button>
+              </form>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>車両番号</th>
+                      <th>車両名</th>
+                      <th>状態</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="vehicleMasterBody"></tbody>
+                </table>
+              </div>
+            </article>
+            <article class="panel">
+              <h2>ドライバー/車両ひも付け</h2>
+              <form id="driverVehicleForm" class="master-form">
+                <select id="assignEmployee"></select>
+                <select id="assignVehicle"></select>
+                <button type="submit" class="btn">ひも付け保存</button>
+              </form>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>社員</th>
+                      <th>車両</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="driverVehicleBody"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+          <section class="panel">
+            <h2>シフト計画管理（予定 vs 実績）</h2>
+            <form id="shiftPlanForm" class="shift-form">
+              <input id="shiftDate" type="date" required />
+              <select id="shiftEmployee" required></select>
+              <input id="shiftStart" type="time" value="08:00" required />
+              <input id="shiftEnd" type="time" value="17:00" required />
+              <select id="shiftRoute" required></select>
+              <button type="submit" class="btn">シフト登録</button>
+            </form>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>日付</th>
+                    <th>社員</th>
+                    <th>予定開始</th>
+                    <th>予定終了</th>
+                    <th>予定ルート</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="shiftPlanBody"></tbody>
+              </table>
+            </div>
           </section>
         </section>
       </main>

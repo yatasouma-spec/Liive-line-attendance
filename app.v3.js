@@ -1,12 +1,18 @@
-const LOGS_KEY = "liiveAttendanceLogsV2";
-const TIMECARD_KEY = "liiveAttendanceTimecardsV2";
-const EMPLOYEES_KEY = "liiveAttendanceEmployeesV1";
-const ROUTES_KEY = "liiveAttendanceRoutesV1";
-const PENDING_KEY = "liiveAttendancePendingCorrectionsV1";
-const MONTH_LOCK_KEY = "liiveAttendanceMonthLocksV1";
-const CORRECTION_MAP_KEY = "liiveAttendanceApprovedMapV1";
-const CSV_TEMPLATE_KEY = "liiveAttendanceCsvTemplateV1";
-const AUDIT_KEY = "liiveAttendanceAuditTrailV1";
+const LOGS_KEY = "liiveAttendanceLogsV3";
+const TIMECARD_KEY = "liiveAttendanceTimecardsV3";
+const EMPLOYEES_KEY = "liiveAttendanceEmployeesV2";
+const ROUTES_KEY = "liiveAttendanceRoutesV2";
+const PENDING_KEY = "liiveAttendancePendingCorrectionsV2";
+const MONTH_LOCK_KEY = "liiveAttendanceMonthLocksV2";
+const CORRECTION_MAP_KEY = "liiveAttendanceApprovedMapV2";
+const CSV_TEMPLATE_KEY = "liiveAttendanceCsvTemplateV2";
+const AUDIT_KEY = "liiveAttendanceAuditTrailV2";
+const VEHICLES_KEY = "liiveAttendanceVehiclesV1";
+const DRIVER_ASSIGN_KEY = "liiveAttendanceDriverVehicleV1";
+const SHIFT_PLAN_KEY = "liiveAttendanceShiftPlansV1";
+const GPS_EVENT_KEY = "liiveAttendanceGpsByEventV1";
+const OPEN_SESSION_KEY = "liiveAttendanceOpenSessionsV1";
+
 const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
 
@@ -25,6 +31,11 @@ const defaultRoutes = [
   { id: "r4", name: "東エリア巡回", active: true },
 ];
 
+const defaultVehicles = [
+  { id: "v1", plate: "品川500 あ 12-34", name: "2tパッカーA", active: true },
+  { id: "v2", plate: "品川500 い 56-78", name: "4tパッカーB", active: true },
+];
+
 function loadJson(key, fallback) {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || "null");
@@ -39,12 +50,18 @@ const state = {
   timecards: loadJson(TIMECARD_KEY, []),
   employees: loadJson(EMPLOYEES_KEY, defaultEmployees),
   routes: loadJson(ROUTES_KEY, defaultRoutes),
+  vehicles: loadJson(VEHICLES_KEY, defaultVehicles),
+  driverAssignments: loadJson(DRIVER_ASSIGN_KEY, {}),
+  shiftPlans: loadJson(SHIFT_PLAN_KEY, []),
+  gpsByEvent: loadJson(GPS_EVENT_KEY, {}),
+  openSessions: loadJson(OPEN_SESSION_KEY, {}),
   pendingCorrections: loadJson(PENDING_KEY, []),
   monthLocks: loadJson(MONTH_LOCK_KEY, {}),
   approvedCorrectionMap: loadJson(CORRECTION_MAP_KEY, {}),
   csvTemplate: loadJson(CSV_TEMPLATE_KEY, "standard_monthly"),
   auditTrail: loadJson(AUDIT_KEY, []),
   employeeSearch: "",
+  currentGps: null,
 };
 
 const viewTitle = {
@@ -52,7 +69,7 @@ const viewTitle = {
   punch: "打刻（LINE）",
   records: "勤怠履歴",
   summary: "月次集計",
-  masters: "管理設定（社員・ルート）",
+  masters: "管理設定（社員/ルート/車両/シフト）",
 };
 
 function persist() {
@@ -60,11 +77,20 @@ function persist() {
   localStorage.setItem(TIMECARD_KEY, JSON.stringify(state.timecards));
   localStorage.setItem(EMPLOYEES_KEY, JSON.stringify(state.employees));
   localStorage.setItem(ROUTES_KEY, JSON.stringify(state.routes));
+  localStorage.setItem(VEHICLES_KEY, JSON.stringify(state.vehicles));
+  localStorage.setItem(DRIVER_ASSIGN_KEY, JSON.stringify(state.driverAssignments));
+  localStorage.setItem(SHIFT_PLAN_KEY, JSON.stringify(state.shiftPlans));
+  localStorage.setItem(GPS_EVENT_KEY, JSON.stringify(state.gpsByEvent));
+  localStorage.setItem(OPEN_SESSION_KEY, JSON.stringify(state.openSessions));
   localStorage.setItem(PENDING_KEY, JSON.stringify(state.pendingCorrections));
   localStorage.setItem(MONTH_LOCK_KEY, JSON.stringify(state.monthLocks));
   localStorage.setItem(CORRECTION_MAP_KEY, JSON.stringify(state.approvedCorrectionMap));
   localStorage.setItem(CSV_TEMPLATE_KEY, JSON.stringify(state.csvTemplate));
   localStorage.setItem(AUDIT_KEY, JSON.stringify(state.auditTrail));
+}
+
+function uid(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 function switchView(nextView) {
@@ -91,13 +117,34 @@ function activeRoutes() {
   return state.routes.filter((r) => r.active);
 }
 
+function activeVehicles() {
+  return state.vehicles.filter((v) => v.active);
+}
+
 function getEmployeeCode(name) {
   const row = state.employees.find((e) => e.name === name);
   return row ? row.code : "";
 }
 
+function getVehicleById(id) {
+  return state.vehicles.find((v) => v.id === id);
+}
+
+function getVehicleNameByEmployee(employeeName) {
+  const employee = state.employees.find((e) => e.name === employeeName);
+  if (!employee) return "-";
+  const vehicleId = state.driverAssignments[employee.id];
+  if (!vehicleId) return "-";
+  const vehicle = getVehicleById(vehicleId);
+  return vehicle ? `${vehicle.plate} ${vehicle.name}` : "-";
+}
+
 function sourceKey(row) {
   return `${row.date || ""}|${row.employee || ""}|${row.site || ""}|${row.checkIn || ""}|${row.checkOut || ""}`;
+}
+
+function eventKey(log) {
+  return `${(log.dateISO || "").slice(0, 16)}|${log.employee || ""}|${log.action || ""}|${log.site || ""}`;
 }
 
 function applyApprovedCorrections(rawRows) {
@@ -107,6 +154,29 @@ function applyApprovedCorrections(rawRows) {
     if (!corrected) return { ...row, sourceKey: key };
     return { ...corrected, sourceKey: key, corrected: true };
   });
+}
+
+function minutesFromHHMM(hhmm) {
+  if (!hhmm || !hhmm.includes(":")) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+function hhmmFromDate(date) {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatYmd(dateIso) {
+  return (dateIso || "").slice(0, 10);
+}
+
+function timeLabel() {
+  return new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+function isMonthLocked(month) {
+  return Boolean(state.monthLocks[month]);
 }
 
 async function apiRequest(path, options = {}) {
@@ -121,7 +191,9 @@ async function apiRequest(path, options = {}) {
 
 function uniqueTodayUsers() {
   const today = new Date().toISOString().slice(0, 10);
-  return new Set(state.logs.filter((r) => (r.dateISO || "").slice(0, 10) === today).map((r) => r.employee)).size;
+  return new Set(
+    state.logs.filter((r) => (r.dateISO || "").slice(0, 10) === today).map((r) => r.employee)
+  ).size;
 }
 
 function currentStatusMap() {
@@ -146,25 +218,103 @@ function currentStatusMap() {
   return map;
 }
 
-function formatYmd(iso) {
-  return (iso || "").slice(0, 10);
+function getShiftFor(date, employee) {
+  return state.shiftPlans.find((s) => s.date === date && s.employee === employee);
+}
+
+function shiftDiffForRow(row) {
+  const plan = getShiftFor(row.date, row.employee);
+  if (!plan) return { label: "予定未登録", lateMin: 0, mismatch: 0, missing: 1 };
+  const actualMin = minutesFromHHMM(row.checkIn);
+  const planMin = minutesFromHHMM(plan.start);
+  const lateMin = actualMin !== null && planMin !== null ? actualMin - planMin : 0;
+  const routeMismatch = plan.route && row.site && plan.route !== row.site ? 1 : 0;
+  const txt = `${lateMin >= 0 ? "+" : ""}${lateMin}分 / ${routeMismatch ? "ルート差異" : "一致"}`;
+  return { label: txt, lateMin, mismatch: routeMismatch, missing: 0 };
+}
+
+function filteredTimecards() {
+  const month = selectedMonth();
+  const keyword = (state.employeeSearch || "").trim().toLowerCase();
+  return state.timecards.filter((r) => {
+    const monthOk = (r.date || "").startsWith(month);
+    const keywordOk = !keyword || String(r.employee || "").toLowerCase().includes(keyword);
+    return monthOk && keywordOk;
+  });
+}
+
+function toCsv(lines, filename) {
+  const csv = lines
+    .map((line) => line.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function buildClosingChecklist(month) {
+  const issues = [];
+  const monthRows = state.timecards.filter((r) => (r.date || "").startsWith(month));
+  const pending = state.pendingCorrections.filter((p) => (p.date || "").startsWith(month));
+  if (pending.length) {
+    issues.push({ level: "block", text: `承認待ち修正申請が ${pending.length} 件あります` });
+  }
+
+  const missingCheckout = monthRows.filter((r) => !r.checkOut || !r.checkIn);
+  if (missingCheckout.length) {
+    issues.push({ level: "block", text: `出退勤の欠損データが ${missingCheckout.length} 件あります` });
+  }
+
+  const shiftMap = new Set(monthRows.map((r) => `${r.date}|${r.employee}`));
+  const shiftNoActual = state.shiftPlans.filter((s) => s.date.startsWith(month) && !shiftMap.has(`${s.date}|${s.employee}`));
+  if (shiftNoActual.length) {
+    issues.push({ level: "warn", text: `シフト予定のみで実績がない日が ${shiftNoActual.length} 件あります` });
+  }
+
+  const statusMap = currentStatusMap();
+  const stillWorking = Array.from(statusMap.values()).filter((x) => x.working);
+  if (stillWorking.length) {
+    issues.push({ level: "block", text: `勤務中のままの社員が ${stillWorking.length} 名います（退勤漏れ確認）` });
+  }
+
+  const overtimeHeavy = new Map();
+  monthRows.forEach((r) => {
+    overtimeHeavy.set(r.employee, (overtimeHeavy.get(r.employee) || 0) + Number(r.overtime || 0));
+  });
+  const over45 = Array.from(overtimeHeavy.entries()).filter(([, h]) => h > 45);
+  if (over45.length) {
+    issues.push({ level: "warn", text: `45h超過見込みの社員が ${over45.length} 名います` });
+  }
+
+  if (!issues.length) issues.push({ level: "ok", text: "締め処理の阻害要因はありません" });
+  return issues;
 }
 
 function computeAlerts() {
   const alerts = [];
   const month = selectedMonth();
   const monthRows = state.timecards.filter((r) => (r.date || "").startsWith(month));
+
   const byEmp = new Map();
   monthRows.forEach((r) => {
     const key = r.employee || "未設定";
-    const prev = byEmp.get(key) || { overtime: 0, late: 0 };
+    const prev = byEmp.get(key) || { overtime: 0, late: 0, shiftDiff: 0, mismatch: 0 };
     prev.overtime += Number(r.overtime || 0);
     prev.late += r.isLate ? 1 : 0;
+    const diff = shiftDiffForRow(r);
+    prev.shiftDiff += diff.lateMin;
+    prev.mismatch += diff.mismatch;
     byEmp.set(key, prev);
   });
+
   byEmp.forEach((v, name) => {
     if (v.overtime > 45) alerts.push(`残業超過注意: ${name} ${v.overtime.toFixed(1)}h`);
     if (v.late >= 3) alerts.push(`遅刻回数注意: ${name} ${v.late}回`);
+    if (v.shiftDiff > 120) alerts.push(`シフト乖離注意: ${name} 累計+${v.shiftDiff}分`);
+    if (v.mismatch >= 2) alerts.push(`ルート差異注意: ${name} ${v.mismatch}件`);
   });
 
   const statusMap = currentStatusMap();
@@ -177,6 +327,35 @@ function computeAlerts() {
 
   if (!alerts.length) alerts.push("重大アラートはありません");
   return alerts;
+}
+
+function populateSelectors() {
+  const employeeOptions = activeEmployees().map((e) => `<option value="${e.name}">${e.name}</option>`).join("");
+  const routeOptions = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
+  const vehicleOptions = activeVehicles().map((v) => `<option value="${v.id}">${v.plate} ${v.name}</option>`).join("");
+
+  ["lineEmployee", "shiftEmployee", "assignEmployee"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prev = el.value;
+    el.innerHTML = employeeOptions;
+    if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
+  });
+
+  ["lineSite", "shiftRoute"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prev = el.value;
+    el.innerHTML = routeOptions;
+    if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
+  });
+
+  const assignVehicle = document.getElementById("assignVehicle");
+  if (assignVehicle) {
+    const prev = assignVehicle.value;
+    assignVehicle.innerHTML = vehicleOptions;
+    if (prev && [...assignVehicle.options].some((o) => o.value === prev)) assignVehicle.value = prev;
+  }
 }
 
 function renderDashboard() {
@@ -207,17 +386,20 @@ function renderDashboard() {
   alertList.innerHTML = computeAlerts().map((txt) => `<li><strong>${txt}</strong></li>`).join("");
 
   renderPendingApprovals();
+  renderAuditTrail();
 }
 
 function renderPendingApprovals() {
   const body = document.getElementById("pendingApprovalBody");
   const count = document.getElementById("pendingCount");
   if (!body || !count) return;
+
   count.textContent = `${state.pendingCorrections.length}件`;
   if (!state.pendingCorrections.length) {
     body.innerHTML = '<tr><td class="empty" colspan="5">承認待ちはありません</td></tr>';
     return;
   }
+
   body.innerHTML = state.pendingCorrections
     .map(
       (row) => `<tr>
@@ -257,16 +439,14 @@ function renderAuditTrail() {
     .join("");
 }
 
-function populatePunchSelectors() {
-  const emp = document.getElementById("lineEmployee");
-  const site = document.getElementById("lineSite");
-  if (!emp || !site) return;
-  const currentEmp = emp.value;
-  const currentSite = site.value;
-  emp.innerHTML = activeEmployees().map((e) => `<option value="${e.name}">${e.name}</option>`).join("");
-  site.innerHTML = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
-  if (currentEmp && activeEmployees().some((e) => e.name === currentEmp)) emp.value = currentEmp;
-  if (currentSite && activeRoutes().some((r) => r.name === currentSite)) site.value = currentSite;
+function renderGpsStatus() {
+  const el = document.getElementById("gpsStatus");
+  if (!el) return;
+  if (!state.currentGps) {
+    el.textContent = "GPS: 未取得";
+    return;
+  }
+  el.textContent = `GPS: ${state.currentGps.lat.toFixed(5)}, ${state.currentGps.lng.toFixed(5)} (${state.currentGps.label})`;
 }
 
 function renderPunchLogs() {
@@ -274,22 +454,15 @@ function renderPunchLogs() {
   if (!list) return;
   const rows = [...state.logs].reverse().slice(0, 10);
   list.innerHTML = rows.length
-    ? rows.map((r) => `<li><strong>${r.employee} / ${r.action}</strong><p>${r.date} ${r.time} / ${r.site} / ${r.source || "LINE"}</p></li>`).join("")
+    ? rows
+        .map((r) => {
+          const geo = state.gpsByEvent[eventKey(r)];
+          const gpsTxt = geo ? ` / GPS ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}` : "";
+          const vehicleTxt = ` / 車両 ${getVehicleNameByEmployee(r.employee)}`;
+          return `<li><strong>${r.employee} / ${r.action}</strong><p>${r.date} ${r.time} / ${r.site}${vehicleTxt}${gpsTxt}</p></li>`;
+        })
+        .join("")
     : "<li><p>打刻履歴がありません</p></li>";
-}
-
-function filteredTimecards() {
-  const month = selectedMonth();
-  const keyword = (state.employeeSearch || "").trim().toLowerCase();
-  return state.timecards.filter((r) => {
-    const monthOk = (r.date || "").startsWith(month);
-    const keywordOk = !keyword || String(r.employee || "").toLowerCase().includes(keyword);
-    return monthOk && keywordOk;
-  });
-}
-
-function isMonthLocked(month) {
-  return Boolean(state.monthLocks[month]);
 }
 
 function renderTimecards() {
@@ -297,10 +470,10 @@ function renderTimecards() {
   if (!body) return;
   const rows = filteredTimecards().sort((a, b) => `${b.date}${b.checkOut || ""}`.localeCompare(`${a.date}${a.checkOut || ""}`));
   const locked = isMonthLocked(selectedMonth());
+
   body.innerHTML = rows.length
     ? rows
-        .map(
-          (r) => `<tr>
+        .map((r) => `<tr>
       <td>${r.date || "-"}</td>
       <td>${r.employee || "-"}</td>
       <td>${r.site || "-"}</td>
@@ -310,11 +483,8 @@ function renderTimecards() {
       <td>${(Number(r.breakMin || 0) / 60).toFixed(1)}h</td>
       <td>${Number(r.overtime || 0).toFixed(1)}h</td>
       <td>${r.isLate ? "あり" : "なし"}</td>
-      <td>
-        <button class="btn btn-ghost" data-request-correction="${r.sourceKey || sourceKey(r)}" ${locked ? "disabled" : ""}>修正申請</button>
-      </td>
-    </tr>`
-        )
+      <td><button class="btn btn-ghost" data-request-correction="${r.sourceKey || sourceKey(r)}" ${locked ? "disabled" : ""}>修正申請</button></td>
+    </tr>`)
         .join("")
     : '<tr><td class="empty" colspan="10">対象データがありません</td></tr>';
 }
@@ -324,16 +494,34 @@ function renderSummary() {
   const month = selectedMonth();
   const rows = filteredTimecards();
   const map = new Map();
+
   rows.forEach((r) => {
     const key = r.employee || "未設定";
-    const slot = map.get(key) || { employee: key, days: new Set(), hours: 0, breakMin: 0, overtime: 0, late: 0 };
+    const slot = map.get(key) || {
+      employee: key,
+      days: new Set(),
+      hours: 0,
+      breakMin: 0,
+      overtime: 0,
+      late: 0,
+      shiftLateMin: 0,
+      shiftMismatch: 0,
+      noShift: 0,
+    };
     slot.days.add(r.date);
     slot.hours += Number(r.hours || 0);
     slot.breakMin += Number(r.breakMin || 0);
     slot.overtime += Number(r.overtime || 0);
     slot.late += r.isLate ? 1 : 0;
+
+    const diff = shiftDiffForRow(r);
+    if (diff.lateMin > 0) slot.shiftLateMin += diff.lateMin;
+    slot.shiftMismatch += diff.mismatch;
+    slot.noShift += diff.missing;
+
     map.set(key, slot);
   });
+
   const summary = Array.from(map.values()).map((x) => ({
     employee: x.employee,
     days: x.days.size,
@@ -341,6 +529,10 @@ function renderSummary() {
     breakHours: Number((x.breakMin / 60).toFixed(1)),
     overtime: Number(x.overtime.toFixed(1)),
     late: x.late,
+    shiftLabel:
+      x.noShift > 0
+        ? `予定未登録 ${x.noShift}件`
+        : `遅延+${x.shiftLateMin}分 / ルート差異${x.shiftMismatch}件`,
   }));
 
   document.getElementById("summaryMembers").textContent = `${summary.length}名`;
@@ -366,19 +558,36 @@ function renderSummary() {
           <td>${r.breakHours.toFixed(1)}h</td>
           <td>${r.overtime.toFixed(1)}h</td>
           <td>${r.late}</td>
+          <td>${r.shiftLabel}</td>
           <td><span class="badge ${cls}">${label}</span></td>
         </tr>`;
         })
         .join("")
-    : '<tr><td class="empty" colspan="7">対象データがありません</td></tr>';
+    : '<tr><td class="empty" colspan="8">対象データがありません</td></tr>';
 
   const tpl = document.getElementById("csvTemplate");
   if (tpl && tpl.value !== state.csvTemplate) tpl.value = state.csvTemplate;
+
+  const checklist = document.getElementById("closingChecklist");
+  if (checklist) {
+    const items = buildClosingChecklist(month);
+    checklist.innerHTML = items
+      .map((item) => {
+        const cls = item.level === "block" ? "danger" : item.level === "warn" ? "warn" : "ok";
+        const label = item.level === "block" ? "要対応" : item.level === "warn" ? "確認" : "OK";
+        return `<li><strong>${item.text}</strong><span class="badge ${cls}">${label}</span></li>`;
+      })
+      .join("");
+  }
 }
 
 function renderMasters() {
   const empBody = document.getElementById("employeeMasterBody");
   const routeBody = document.getElementById("routeMasterBody");
+  const vehicleBody = document.getElementById("vehicleMasterBody");
+  const assignBody = document.getElementById("driverVehicleBody");
+  const shiftBody = document.getElementById("shiftPlanBody");
+
   if (empBody) {
     empBody.innerHTML = state.employees
       .map(
@@ -394,6 +603,7 @@ function renderMasters() {
       )
       .join("");
   }
+
   if (routeBody) {
     routeBody.innerHTML = state.routes
       .map(
@@ -408,39 +618,76 @@ function renderMasters() {
       )
       .join("");
   }
+
+  if (vehicleBody) {
+    vehicleBody.innerHTML = state.vehicles
+      .map(
+        (v) => `<tr>
+      <td>${v.plate}</td>
+      <td>${v.name}</td>
+      <td><span class="badge ${v.active ? "ok" : "warn"}">${v.active ? "有効" : "無効"}</span></td>
+      <td>
+        <button class="btn btn-ghost" data-edit-vehicle="${v.id}">名称変更</button>
+        <button class="btn btn-ghost" data-toggle-vehicle="${v.id}">${v.active ? "無効化" : "有効化"}</button>
+      </td>
+    </tr>`
+      )
+      .join("");
+  }
+
+  if (assignBody) {
+    const rows = state.employees
+      .filter((e) => e.active)
+      .map((e) => {
+        const vid = state.driverAssignments[e.id];
+        const v = vid ? getVehicleById(vid) : null;
+        return `<tr>
+        <td>${e.name}</td>
+        <td>${v ? `${v.plate} ${v.name}` : "未設定"}</td>
+        <td><button class="btn btn-ghost" data-clear-assign="${e.id}">解除</button></td>
+      </tr>`;
+      });
+    assignBody.innerHTML = rows.join("") || '<tr><td class="empty" colspan="3">社員がいません</td></tr>';
+  }
+
+  if (shiftBody) {
+    shiftBody.innerHTML = [...state.shiftPlans]
+      .sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`))
+      .slice(0, 300)
+      .map(
+        (s) => `<tr>
+      <td>${s.date}</td>
+      <td>${s.employee}</td>
+      <td>${s.start}</td>
+      <td>${s.end}</td>
+      <td>${s.route}</td>
+      <td><button class="btn btn-ghost" data-delete-shift="${s.id}">削除</button></td>
+    </tr>`
+      )
+      .join("");
+  }
 }
 
 function renderAll() {
-  populatePunchSelectors();
+  populateSelectors();
   renderDashboard();
+  renderGpsStatus();
   renderPunchLogs();
   renderTimecards();
   renderSummary();
   renderMasters();
-  renderAuditTrail();
   persist();
-}
-
-function toCsv(lines, filename) {
-  const csv = lines
-    .map((line) => line.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))
-    .join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(link.href);
 }
 
 function exportDetailCsv() {
   const month = selectedMonth();
   const rows = filteredTimecards();
-  const header = ["日付", "社員", "社員コード", "現場/ルート", "出勤", "退勤", "労働時間", "休憩分", "残業", "遅刻"];
+  const header = ["日付", "社員", "社員コード", "車両", "現場/ルート", "出勤", "退勤", "労働時間", "休憩分", "残業", "遅刻"];
   const body = rows.map((r) => [
     r.date,
     r.employee,
     getEmployeeCode(r.employee),
+    getVehicleNameByEmployee(r.employee),
     r.site,
     r.checkIn,
     r.checkOut,
@@ -455,8 +702,9 @@ function exportDetailCsv() {
 function exportPayrollCsv() {
   const month = selectedMonth();
   const rows = filteredTimecards();
+
   if (state.csvTemplate === "freee_daily") {
-    const header = ["date", "employee_code", "employee_name", "clock_in", "clock_out", "break_minutes", "work_hours", "overtime_hours"];
+    const header = ["date", "employee_code", "employee_name", "clock_in", "clock_out", "break_minutes", "work_hours", "overtime_hours", "vehicle"];
     const body = rows.map((r) => [
       r.date,
       getEmployeeCode(r.employee),
@@ -466,6 +714,7 @@ function exportPayrollCsv() {
       Number(r.breakMin || 0),
       Number(r.hours || 0).toFixed(1),
       Number(r.overtime || 0).toFixed(1),
+      getVehicleNameByEmployee(r.employee),
     ]);
     toCsv([header, ...body], `liive_payroll_freee_${month}.csv`);
     return;
@@ -482,17 +731,35 @@ function exportPayrollCsv() {
     slot.late += r.isLate ? 1 : 0;
     map.set(key, slot);
   });
-  const header = ["対象月", "社員コード", "社員名", "出勤日数", "総労働時間(h)", "総休憩時間(h)", "残業時間(h)", "遅刻回数"];
-  const body = Array.from(map.values()).map((x) => [
+
+  const baseRows = Array.from(map.values()).map((x) => ({
     month,
-    getEmployeeCode(x.employee),
-    x.employee,
-    x.days.size,
-    x.hours.toFixed(1),
-    (x.breakMin / 60).toFixed(1),
-    x.overtime.toFixed(1),
-    x.late,
-  ]);
+    code: getEmployeeCode(x.employee),
+    employee: x.employee,
+    vehicle: getVehicleNameByEmployee(x.employee),
+    days: x.days.size,
+    hours: x.hours.toFixed(1),
+    breakHours: (x.breakMin / 60).toFixed(1),
+    overtime: x.overtime.toFixed(1),
+    late: x.late,
+  }));
+
+  if (state.csvTemplate === "jobcan_payroll") {
+    const header = ["対象月", "社員コード", "社員名", "車両", "出勤日数", "労働時間", "残業時間", "遅刻回数"];
+    const body = baseRows.map((r) => [r.month, r.code, r.employee, r.vehicle, r.days, r.hours, r.overtime, r.late]);
+    toCsv([header, ...body], `liive_payroll_jobcan_${month}.csv`);
+    return;
+  }
+
+  if (state.csvTemplate === "yayoi_payroll") {
+    const header = ["対象月", "社員コード", "社員名", "出勤日数", "総労働時間(h)", "総休憩時間(h)", "残業時間(h)", "遅刻回数", "車両"];
+    const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.breakHours, r.overtime, r.late, r.vehicle]);
+    toCsv([header, ...body], `liive_payroll_yayoi_${month}.csv`);
+    return;
+  }
+
+  const header = ["対象月", "社員コード", "社員名", "出勤日数", "総労働時間(h)", "総休憩時間(h)", "残業時間(h)", "遅刻回数", "車両"];
+  const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.breakHours, r.overtime, r.late, r.vehicle]);
   toCsv([header, ...body], `liive_payroll_${month}.csv`);
 }
 
@@ -502,23 +769,37 @@ function exportSiteHoursCsv() {
   const map = new Map();
   rows.forEach((r) => {
     const key = r.site || "未設定";
-    const slot = map.get(key) || { site: key, workers: new Set(), days: new Set(), hours: 0, overtime: 0 };
+    const slot = map.get(key) || { site: key, workers: new Set(), days: new Set(), hours: 0, overtime: 0, vehicles: new Set() };
     slot.workers.add(r.employee || "未設定");
     slot.days.add(r.date);
     slot.hours += Number(r.hours || 0);
     slot.overtime += Number(r.overtime || 0);
+    const v = getVehicleNameByEmployee(r.employee);
+    if (v && v !== "-") slot.vehicles.add(v);
     map.set(key, slot);
   });
-  const header = ["対象月", "現場/ルート", "稼働人数", "稼働日数", "総工数(h)", "残業工数(h)"];
-  const body = Array.from(map.values()).map((x) => [
-    month,
-    x.site,
-    x.workers.size,
-    x.days.size,
-    x.hours.toFixed(1),
-    x.overtime.toFixed(1),
-  ]);
+  const header = ["対象月", "現場/ルート", "稼働人数", "稼働日数", "総工数(h)", "残業工数(h)", "主車両"];
+  const body = Array.from(map.values()).map((x) => [month, x.site, x.workers.size, x.days.size, x.hours.toFixed(1), x.overtime.toFixed(1), Array.from(x.vehicles).join(" / ")]);
   toCsv([header, ...body], `liive_site_hours_${month}.csv`);
+}
+
+function exportAuditPackage() {
+  const month = selectedMonth();
+  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
+
+  exportDetailCsv();
+  exportPayrollCsv();
+  exportSiteHoursCsv();
+
+  const auditHeader = ["日時", "社員", "対象日", "内容", "理由", "判定"];
+  const auditBody = state.auditTrail
+    .filter((a) => (a.date || "").startsWith(month))
+    .map((a) => [a.at, a.employee, a.date, a.diff, a.reason, a.decision]);
+  toCsv([auditHeader, ...auditBody], `liive_audit_trail_${month}_${ts}.csv`);
+
+  const checkHeader = ["対象月", "判定", "項目"];
+  const checkBody = buildClosingChecklist(month).map((c) => [month, c.level, c.text]);
+  toCsv([checkHeader, ...checkBody], `liive_close_checklist_${month}_${ts}.csv`);
 }
 
 function recalcByTimes(date, checkIn, checkOut, breakMin) {
@@ -541,6 +822,7 @@ function requestCorrection(source) {
     alert("この月はロック中です。ロック解除してから修正してください。");
     return;
   }
+
   const newIn = window.prompt("修正後の出勤時刻(HH:MM)", row.checkIn || "09:00");
   if (!newIn) return;
   const newOut = window.prompt("修正後の退勤時刻(HH:MM)", row.checkOut || "18:00");
@@ -551,7 +833,7 @@ function requestCorrection(source) {
   if (!reason) return;
 
   state.pendingCorrections.push({
-    id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: uid("p"),
     sourceKey: source,
     date: row.date,
     employee: row.employee,
@@ -573,12 +855,14 @@ function approveCorrection(id) {
     alert("この月はロック中です。");
     return;
   }
+
   const base = state.timecards.find((r) => (r.sourceKey || sourceKey(r)) === req.sourceKey);
   if (!base) {
     state.pendingCorrections = state.pendingCorrections.filter((p) => p.id !== id);
     renderAll();
     return;
   }
+
   const recalc = recalcByTimes(req.date, req.newCheckIn, req.newCheckOut, Number(req.newBreakMin || 0));
   const corrected = {
     ...base,
@@ -639,12 +923,91 @@ function applySnapshot(snapshot) {
     }));
   }
   if (Array.isArray(snapshot.timecards)) {
-    const patched = applyApprovedCorrections(snapshot.timecards);
-    state.timecards = patched;
+    state.timecards = applyApprovedCorrections(snapshot.timecards);
   }
   if (snapshot.lineSync) {
     document.getElementById("syncStatus").textContent = "PCへ反映済み";
   }
+}
+
+function actionLabel(action) {
+  if (action === "checkin") return "出勤";
+  if (action === "checkout") return "退勤";
+  if (action === "breakStart") return "休憩開始";
+  if (action === "breakEnd") return "休憩終了";
+  return action;
+}
+
+function recordLocalAction(employee, site, action) {
+  const now = new Date();
+  const date = formatYmd(now.toISOString());
+  const time = hhmmFromDate(now);
+  const label = actionLabel(action);
+
+  state.logs.push({
+    employee,
+    site,
+    action: label,
+    source: "WEB",
+    time,
+    date,
+    dateISO: now.toISOString(),
+  });
+
+  const current = state.openSessions[employee] || null;
+  if (action === "checkin") {
+    state.openSessions[employee] = { checkInISO: now.toISOString(), breakStartISO: null, totalBreakMin: 0, site };
+  } else if (action === "breakStart" && current?.checkInISO) {
+    current.breakStartISO = now.toISOString();
+    state.openSessions[employee] = current;
+  } else if (action === "breakEnd" && current?.checkInISO) {
+    if (current.breakStartISO) {
+      const addMin = Math.max(0, Math.round((now.getTime() - new Date(current.breakStartISO).getTime()) / 60000));
+      current.totalBreakMin = (current.totalBreakMin || 0) + addMin;
+      current.breakStartISO = null;
+    }
+    state.openSessions[employee] = current;
+  } else if (action === "checkout" && current?.checkInISO) {
+    let breakMin = current.totalBreakMin || 0;
+    if (current.breakStartISO) {
+      breakMin += Math.max(0, Math.round((now.getTime() - new Date(current.breakStartISO).getTime()) / 60000));
+    }
+    const checkInAt = new Date(current.checkInISO);
+    const rawHours = (now.getTime() - checkInAt.getTime()) / 3600000;
+    const hours = Math.max(0.5, Number((rawHours - breakMin / 60).toFixed(1)));
+    const overtime = Math.max(0, Number((hours - 8).toFixed(1)));
+    const isLate = checkInAt.getHours() * 60 + checkInAt.getMinutes() > 9 * 60;
+
+    const row = {
+      date,
+      employee,
+      site: current.site || site,
+      checkIn: hhmmFromDate(checkInAt),
+      checkOut: time,
+      hours,
+      breakMin,
+      overtime,
+      isLate,
+    };
+    row.sourceKey = sourceKey(row);
+    state.timecards.push(row);
+    delete state.openSessions[employee];
+  }
+
+  state.logs = state.logs.slice(-2000);
+  state.timecards = state.timecards.slice(-20000);
+}
+
+function attachGpsToLatest(employee, actionLabelText) {
+  if (!state.currentGps || !state.logs.length) return;
+  const latest = [...state.logs].reverse().find((r) => r.employee === employee && r.action === actionLabelText);
+  if (!latest) return;
+  state.gpsByEvent[eventKey(latest)] = {
+    lat: state.currentGps.lat,
+    lng: state.currentGps.lng,
+    label: state.currentGps.label,
+    at: new Date().toISOString(),
+  };
 }
 
 async function pullSnapshot() {
@@ -661,22 +1024,60 @@ async function lineAction(action) {
   const employee = document.getElementById("lineEmployee")?.value;
   const site = document.getElementById("lineSite")?.value;
   if (!employee || !site) return;
+
   document.getElementById("syncStatus").textContent = "同期中...";
+  const payload = {
+    employee,
+    site,
+    action,
+    gps: state.currentGps ? { lat: state.currentGps.lat, lng: state.currentGps.lng } : null,
+  };
+
   try {
     if (API_ENABLED) {
       const data = await apiRequest("/api/line-action", {
         method: "POST",
-        body: JSON.stringify({ employee, site, action }),
+        body: JSON.stringify(payload),
       });
       if (data?.ok && data.snapshot) {
         applySnapshot(data.snapshot);
+        attachGpsToLatest(employee, actionLabel(action));
         renderAll();
         document.getElementById("syncStatus").textContent = "PCへ反映済み";
         return;
       }
     }
   } catch (_e) {}
-  document.getElementById("syncStatus").textContent = "反映失敗（再試行）";
+
+  // API未利用時のデモ用フォールバック
+  recordLocalAction(employee, site, action);
+  attachGpsToLatest(employee, actionLabel(action));
+  renderAll();
+  document.getElementById("syncStatus").textContent = API_ENABLED ? "反映失敗（ローカル記録のみ）" : "ローカル記録済み";
+}
+
+function captureGps() {
+  const status = document.getElementById("gpsStatus");
+  if (!navigator.geolocation) {
+    if (status) status.textContent = "GPS: この端末は位置情報未対応";
+    return;
+  }
+  if (status) status.textContent = "GPS: 取得中...";
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      state.currentGps = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        label: timeLabel(),
+      };
+      renderGpsStatus();
+      persist();
+    },
+    () => {
+      if (status) status.textContent = "GPS: 取得に失敗しました（権限を確認）";
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
 }
 
 function bindMasterEvents() {
@@ -689,7 +1090,7 @@ function bindMasterEvents() {
       alert("同じ社員コードがあります");
       return;
     }
-    state.employees.push({ id: `e-${Date.now()}`, code, name, active: true });
+    state.employees.push({ id: uid("e"), code, name, active: true });
     document.getElementById("employeeCode").value = "";
     document.getElementById("employeeName").value = "";
     renderAll();
@@ -699,8 +1100,49 @@ function bindMasterEvents() {
     e.preventDefault();
     const name = document.getElementById("routeName").value.trim();
     if (!name) return;
-    state.routes.push({ id: `r-${Date.now()}`, name, active: true });
+    state.routes.push({ id: uid("r"), name, active: true });
     document.getElementById("routeName").value = "";
+    renderAll();
+  });
+
+  document.getElementById("vehicleForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const plate = document.getElementById("vehiclePlate").value.trim();
+    const name = document.getElementById("vehicleName").value.trim();
+    if (!plate || !name) return;
+    state.vehicles.push({ id: uid("v"), plate, name, active: true });
+    document.getElementById("vehiclePlate").value = "";
+    document.getElementById("vehicleName").value = "";
+    renderAll();
+  });
+
+  document.getElementById("driverVehicleForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const employeeName = document.getElementById("assignEmployee")?.value;
+    const vehicleId = document.getElementById("assignVehicle")?.value;
+    const emp = state.employees.find((x) => x.name === employeeName);
+    if (!emp || !vehicleId) return;
+    state.driverAssignments[emp.id] = vehicleId;
+    renderAll();
+  });
+
+  document.getElementById("shiftPlanForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const date = document.getElementById("shiftDate").value;
+    const employee = document.getElementById("shiftEmployee").value;
+    const start = document.getElementById("shiftStart").value;
+    const end = document.getElementById("shiftEnd").value;
+    const route = document.getElementById("shiftRoute").value;
+    if (!date || !employee || !start || !end || !route) return;
+
+    const existing = state.shiftPlans.find((s) => s.date === date && s.employee === employee);
+    if (existing) {
+      existing.start = start;
+      existing.end = end;
+      existing.route = route;
+    } else {
+      state.shiftPlans.push({ id: uid("s"), date, employee, start, end, route });
+    }
     renderAll();
   });
 
@@ -747,16 +1189,61 @@ function bindMasterEvents() {
       renderAll();
     }
   });
+
+  document.getElementById("vehicleMasterBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const toggleId = target.getAttribute("data-toggle-vehicle");
+    if (toggleId) {
+      const row = state.vehicles.find((x) => x.id === toggleId);
+      if (!row) return;
+      row.active = !row.active;
+      renderAll();
+      return;
+    }
+    const editId = target.getAttribute("data-edit-vehicle");
+    if (editId) {
+      const row = state.vehicles.find((x) => x.id === editId);
+      if (!row) return;
+      const next = window.prompt("車両名を変更", row.name);
+      if (!next) return;
+      row.name = next.trim();
+      renderAll();
+    }
+  });
+
+  document.getElementById("driverVehicleBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const empId = target.getAttribute("data-clear-assign");
+    if (!empId) return;
+    delete state.driverAssignments[empId];
+    renderAll();
+  });
+
+  document.getElementById("shiftPlanBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const id = target.getAttribute("data-delete-shift");
+    if (!id) return;
+    state.shiftPlans = state.shiftPlans.filter((s) => s.id !== id);
+    renderAll();
+  });
 }
 
 function bindEvents() {
-  document.querySelectorAll(".nav-link").forEach((btn) => btn.addEventListener("click", () => switchView(btn.dataset.view)));
+  document.querySelectorAll(".nav-link").forEach((btn) =>
+    btn.addEventListener("click", () => switchView(btn.dataset.view))
+  );
 
   const monthInput = document.getElementById("timecardMonth");
   if (monthInput) {
     monthInput.value = new Date().toISOString().slice(0, 7);
     monthInput.addEventListener("change", renderAll);
   }
+
+  const shiftDate = document.getElementById("shiftDate");
+  if (shiftDate) shiftDate.value = new Date().toISOString().slice(0, 10);
 
   document.getElementById("employeeSearch")?.addEventListener("input", (e) => {
     state.employeeSearch = e.target.value || "";
@@ -767,6 +1254,7 @@ function bindEvents() {
   document.getElementById("downloadTimecardCsvBtn")?.addEventListener("click", exportDetailCsv);
   document.getElementById("downloadPayrollCsvBtn")?.addEventListener("click", exportPayrollCsv);
   document.getElementById("downloadSiteHoursCsvBtn")?.addEventListener("click", exportSiteHoursCsv);
+  document.getElementById("downloadAuditPackageBtn")?.addEventListener("click", exportAuditPackage);
 
   document.getElementById("csvTemplate")?.addEventListener("change", (e) => {
     state.csvTemplate = e.target.value;
@@ -775,9 +1263,22 @@ function bindEvents() {
 
   document.getElementById("toggleMonthLockBtn")?.addEventListener("click", () => {
     const month = selectedMonth();
-    state.monthLocks[month] = !state.monthLocks[month];
+    if (!isMonthLocked(month)) {
+      const blockers = buildClosingChecklist(month).filter((x) => x.level === "block");
+      if (blockers.length) {
+        alert(`この月はまだロックできません。\n- ${blockers.map((b) => b.text).join("\n- ")}`);
+        return;
+      }
+      if (!window.confirm(`${month} を締めロックしますか？（修正申請不可）`)) return;
+      state.monthLocks[month] = true;
+    } else {
+      if (!window.confirm(`${month} のロックを解除しますか？`)) return;
+      state.monthLocks[month] = false;
+    }
     renderAll();
   });
+
+  document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);
 
   document.getElementById("lineCheckInBtn")?.addEventListener("click", () => lineAction("checkin"));
   document.getElementById("lineCheckOutBtn")?.addEventListener("click", () => lineAction("checkout"));
