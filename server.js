@@ -68,7 +68,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       continue;
     }
 
-    const snapshot = processLineAction({ employee, site, action, source: "LINE" });
+    const snapshot = processLineAction({ employee, site, action, source: "LINE", lineUserId: userId });
     const msg = `受け付けました: ${employee} / ${site} / ${actionLabel(action)} (${snapshot.lineSync?.time || "-"})`;
     await sendLineReply(event.replyToken, msg, { withQuickReply: true });
   }
@@ -251,32 +251,36 @@ function actionLabel(action) {
   return action;
 }
 
-function processLineAction({ employee, site, action, source }) {
+function processLineAction({ employee, site, action, source, lineUserId = "" }) {
   const now = new Date();
   const nowJst = toJstParts(now);
   const time = nowJst.time;
   const date = nowJst.date;
 
   const db = readDb();
-  const userCheckin = db.checkins[employee];
+  const sessionKey = source === "LINE" && lineUserId ? `line:${lineUserId}` : employee;
+  const userCheckin = db.checkins[sessionKey];
+  const sessionEmployee = userCheckin?.employeeName || employee;
 
   if (action === "checkin") {
-    db.checkins[employee] = {
+    db.checkins[sessionKey] = {
       checkInISO: now.toISOString(),
       checkInMinutes: nowJst.minutes,
       breakStartISO: null,
       totalBreakMin: 0,
       site,
+      employeeName: employee,
+      lineUserId: lineUserId || null,
     };
-    db.logs.push({ date, time, employee, site, action: "出勤", source });
-    db.lineSync = { employee, site, action: "出勤", time, dateISO: now.toISOString() };
+    db.logs.push({ date, time, employee, site, action: "出勤", source, lineUserId: lineUserId || null });
+    db.lineSync = { employee, site, action: "出勤", time, dateISO: now.toISOString(), lineUserId: lineUserId || null };
   }
 
   if (action === "breakStart") {
     if (userCheckin?.checkInISO) {
       userCheckin.breakStartISO = now.toISOString();
-      db.logs.push({ date, time, employee, site, action: "休憩開始", source });
-      db.lineSync = { employee, site, action: "休憩開始", time, dateISO: now.toISOString() };
+      db.logs.push({ date, time, employee: sessionEmployee, site, action: "休憩開始", source, lineUserId: lineUserId || null });
+      db.lineSync = { employee: sessionEmployee, site, action: "休憩開始", time, dateISO: now.toISOString(), lineUserId: lineUserId || null };
     }
   }
 
@@ -290,8 +294,8 @@ function processLineAction({ employee, site, action, source }) {
         userCheckin.totalBreakMin = (userCheckin.totalBreakMin || 0) + addMin;
         userCheckin.breakStartISO = null;
       }
-      db.logs.push({ date, time, employee, site, action: "休憩終了", source });
-      db.lineSync = { employee, site, action: "休憩終了", time, dateISO: now.toISOString() };
+      db.logs.push({ date, time, employee: sessionEmployee, site, action: "休憩終了", source, lineUserId: lineUserId || null });
+      db.lineSync = { employee: sessionEmployee, site, action: "休憩終了", time, dateISO: now.toISOString(), lineUserId: lineUserId || null };
     }
   }
 
@@ -313,7 +317,7 @@ function processLineAction({ employee, site, action, source }) {
 
       db.timecards.push({
         date,
-        employee,
+        employee: sessionEmployee,
         site: userCheckin.site || site,
         checkIn: checkInJst.time,
         checkOut: time,
@@ -322,9 +326,9 @@ function processLineAction({ employee, site, action, source }) {
         overtime,
         isLate,
       });
-      db.logs.push({ date, time, employee, site, action: "退勤", source, hours, breakMin, overtime });
+      db.logs.push({ date, time, employee: sessionEmployee, site, action: "退勤", source, hours, breakMin, overtime, lineUserId: lineUserId || null });
       db.lineSync = {
-        employee,
+        employee: sessionEmployee,
         site: userCheckin.site || site,
         action: "退勤",
         time,
@@ -332,8 +336,9 @@ function processLineAction({ employee, site, action, source }) {
         breakMin,
         overtime,
         dateISO: now.toISOString(),
+        lineUserId: lineUserId || null,
       };
-      delete db.checkins[employee];
+      delete db.checkins[sessionKey];
     }
   }
 
