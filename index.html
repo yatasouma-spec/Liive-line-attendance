@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Liive | 管理画面デモ</title>
+    <title>Liive勤怠 | 一般廃棄物向け</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,406 +15,134 @@
   <body>
     <div class="app">
       <aside class="sidebar">
-        <div class="brand">Liive</div>
+        <div class="brand">Liive勤怠</div>
+        <p class="brand-sub">一般廃棄物向け 勤怠管理</p>
         <nav>
-          <button type="button" class="nav-link active" data-view="dashboard">
-            <span class="nav-ico">▦</span>ダッシュボード
-          </button>
-          <button type="button" class="nav-link" data-view="projects"><span class="nav-ico">🗂</span>案件管理</button>
-          <button type="button" class="nav-link" data-view="operations"><span class="nav-ico">♻</span>産廃業務</button>
-          <button type="button" class="nav-link" data-view="lawcheck"><span class="nav-ico">⚖</span>法改正チェックAI</button>
-          <button type="button" class="nav-link" data-view="docagent"><span class="nav-ico">📄</span>書類自動生成</button>
-          <button type="button" class="nav-link" data-view="digitacho"><span class="nav-ico">🚛</span>デジタコ連携</button>
-          <button type="button" class="nav-link" data-view="auditalert"><span class="nav-ico">🔎</span>監査前アラート</button>
-          <button type="button" class="nav-link" data-view="shift"><span class="nav-ico">📅</span>シフト管理</button>
-          <button type="button" class="nav-link" data-view="daily"><span class="nav-ico">📝</span>LINE日報</button>
-          <button type="button" class="nav-link" data-view="report"><span class="nav-ico">◎</span>収支レポート</button>
-          <button type="button" class="nav-link" data-view="invoice"><span class="nav-ico">🧾</span>請求書作成</button>
+          <button type="button" class="nav-link active" data-view="dashboard">ダッシュボード</button>
+          <button type="button" class="nav-link" data-view="punch">打刻（LINE）</button>
+          <button type="button" class="nav-link" data-view="records">勤怠履歴</button>
+          <button type="button" class="nav-link" data-view="summary">月次集計</button>
         </nav>
       </aside>
 
       <main class="main">
         <header class="topbar">
-          <h1 id="pageTitle">現場管理ダッシュボード</h1>
-          <button type="button" class="btn" id="newProjectBtn">新規案件</button>
+          <h1 id="pageTitle">勤怠ダッシュボード</h1>
         </header>
 
         <section class="view active" data-view="dashboard">
           <section class="kpi-grid">
             <article class="kpi">
-              <p>今月売上</p>
-              <h2 id="kpiSales">¥0</h2>
-              <small>先月比 +8.4%</small>
+              <p>本日打刻人数</p>
+              <h2 id="kpiTodayUsers">0名</h2>
             </article>
             <article class="kpi">
-              <p>今月原価</p>
-              <h2 id="kpiCost">¥0</h2>
-              <small>先月比 +2.1%</small>
+              <p>勤務中人数</p>
+              <h2 id="kpiWorking">0名</h2>
             </article>
             <article class="kpi">
-              <p>粗利</p>
-              <h2 id="kpiProfit">¥0</h2>
-              <small id="kpiRate">粗利率 0%</small>
+              <p>今月総労働時間</p>
+              <h2 id="kpiMonthHours">0h</h2>
+            </article>
+            <article class="kpi">
+              <p>今月残業時間</p>
+              <h2 id="kpiOvertime">0h</h2>
             </article>
           </section>
 
           <section class="grid-2">
             <article class="panel">
-              <h2>収支アラート</h2>
-              <ul class="alert-list" id="alertList"></ul>
-            </article>
-
-            <article class="panel">
-              <h2>ステータス集計</h2>
-              <ul class="status-list" id="statusList"></ul>
-            </article>
-          </section>
-
-          <section class="panel">
-            <h2>営業成績サマリー（売上構成）</h2>
-            <div class="pie-wrap pie-wrap-lg">
-              <div class="pie-chart pie-chart-lg" id="salesPieChart" aria-label="営業成績円グラフ"></div>
-              <div class="pie-side">
-                <ul class="pie-legend" id="salesPieLegend"></ul>
-                <div class="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>担当</th>
-                        <th>売上</th>
-                        <th>構成比</th>
-                      </tr>
-                    </thead>
-                    <tbody id="salesTopBody"></tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="grid-2">
-            <article class="panel">
-              <h2>最新の日報</h2>
-              <ul class="log-list" id="recentLogs"></ul>
-            </article>
-            <article class="panel">
-              <h2>今月の締切案件</h2>
-              <ul class="log-list" id="deadlineList"></ul>
-            </article>
-          </section>
-        </section>
-
-        <section class="view" data-view="projects">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>案件一覧</h2>
-              <div class="filters">
-                <input id="projectSearch" type="search" placeholder="案件名・担当者で検索" />
-                <select id="projectStatus">
-                  <option value="すべて">すべて</option>
-                  <option value="進行中">進行中</option>
-                  <option value="見積中">見積中</option>
-                  <option value="完了">完了</option>
-                </select>
-              </div>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>案件名</th>
-                    <th>顧客</th>
-                    <th>担当</th>
-                    <th>ステータス</th>
-                    <th>売上予定</th>
-                    <th>原価実績</th>
-                    <th>進捗</th>
-                    <th>期日</th>
-                    <th>粗利率</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody id="projectTableBody"></tbody>
-              </table>
-            </div>
-          </section>
-        </section>
-
-        <section class="view" data-view="operations">
-          <section class="kpi-grid ops-kpi-grid">
-            <article class="kpi">
-              <p>本日回収便</p>
-              <h2 id="opsTrips">0便</h2>
-              <small>配車・回収実績</small>
-            </article>
-            <article class="kpi">
-              <p>本日回収量</p>
-              <h2 id="opsVolume">0 t</h2>
-              <small>混廃/木くず/金属など</small>
-            </article>
-            <article class="kpi">
-              <p>請求見込（当月）</p>
-              <h2 id="opsBilling">¥0</h2>
-              <small>回収実績から自動集計</small>
-            </article>
-          </section>
-
-          <section class="panel">
-            <div class="panel-head">
-              <h2>回収実績を追加</h2>
-              <p class="section-lead">配車結果を入力すると、マニフェストと請求見込に反映されます。</p>
-            </div>
-            <form id="collectionForm" class="daily-form">
-              <div class="form-row">
-                <label>回収日<input id="colDate" type="date" /></label>
-                <label>車両<input id="colVehicle" type="text" placeholder="例: 品川 100 あ 12-34" /></label>
-              </div>
-              <div class="form-row">
-                <label>ドライバー<input id="colDriver" type="text" placeholder="例: 田中" /></label>
-                <label>排出事業者<input id="colClient" type="text" placeholder="例: 東京建設" /></label>
-              </div>
-              <div class="form-row">
-                <label>品目
-                  <select id="colWasteType">
-                    <option value="混合廃棄物">混合廃棄物</option>
-                    <option value="木くず">木くず</option>
-                    <option value="金属くず">金属くず</option>
-                    <option value="廃プラ">廃プラ</option>
-                  </select>
-                </label>
-                <label>回収量(t)<input id="colVolume" type="number" min="0.1" step="0.1" value="1.0" /></label>
-              </div>
-              <div class="form-row">
-                <label>回収単価(円/t)<input id="colUnitPrice" type="number" min="0" step="100" value="22000" /></label>
-                <label>処分原価(円/t)<input id="colDisposalCost" type="number" min="0" step="100" value="12000" /></label>
-              </div>
-              <button type="submit" class="btn">回収実績を登録</button>
-            </form>
-          </section>
-
-          <section class="grid-2">
-            <article class="panel">
-              <div class="panel-head">
-                <h2>配車・回収実績</h2>
-                <button type="button" class="btn btn-ghost" id="downloadCollectionCsvBtn">CSV出力</button>
-              </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>日付</th>
-                      <th>車両</th>
-                      <th>ドライバー</th>
-                      <th>排出事業者</th>
-                      <th>品目</th>
-                      <th>量(t)</th>
-                    </tr>
-                  </thead>
-                  <tbody id="collectionBody"></tbody>
-                </table>
-              </div>
-            </article>
-            <article class="panel">
-              <h2>許可・期限アラート</h2>
-              <ul class="log-list" id="permitAlertList"></ul>
-            </article>
-          </section>
-
-          <section class="grid-2">
-            <article class="panel">
-              <h2>マニフェスト進捗</h2>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>交付番号</th>
-                      <th>排出事業者</th>
-                      <th>品目</th>
-                      <th>回収日</th>
-                      <th>状態</th>
-                    </tr>
-                  </thead>
-                  <tbody id="manifestBody"></tbody>
-                </table>
-              </div>
-            </article>
-            <article class="panel">
-              <h2>請求データ生成</h2>
-              <p class="section-lead">当月の回収実績から請求用CSVを生成します。</p>
+              <h2>最新打刻</h2>
               <ul class="status-list">
-                <li><span>対象件数</span><strong id="billingCount">0件</strong></li>
-                <li><span>請求見込</span><strong id="billingPreview">¥0</strong></li>
-                <li><span>粗利見込</span><strong id="billingProfitPreview">¥0</strong></li>
+                <li><span>社員</span><strong id="latestEmployee">-</strong></li>
+                <li><span>現場/ルート</span><strong id="latestSite">-</strong></li>
+                <li><span>種別</span><strong id="latestAction">-</strong></li>
+                <li><span>時刻</span><strong id="latestTime">-</strong></li>
               </ul>
-              <div class="modal-actions">
-                <button type="button" class="btn" id="downloadInvoiceCsvBtn">請求CSVを生成</button>
-              </div>
+              <p class="section-lead">LINEで打刻すると自動で反映されます。</p>
+            </article>
+            <article class="panel">
+              <h2>勤務ステータス一覧</h2>
+              <ul class="log-list" id="workingStatusList"></ul>
             </article>
           </section>
+        </section>
+
+        <section class="view" data-view="punch">
+          <section class="panel">
+            <h2>ワンタップ打刻（LINE連携）</h2>
+            <p class="section-lead">高齢の方でも押しやすいように、ボタンを大きくしています。</p>
+
+            <div class="punch-form">
+              <label>社員
+                <select id="lineEmployee"></select>
+              </label>
+              <label>収集ルート / 現場
+                <select id="lineSite"></select>
+              </label>
+            </div>
+
+            <div class="big-button-grid">
+              <button type="button" class="big-btn checkin" id="lineCheckInBtn">出勤</button>
+              <button type="button" class="big-btn checkout" id="lineCheckOutBtn">退勤</button>
+              <button type="button" class="big-btn break-start" id="lineBreakStartBtn">休憩開始</button>
+              <button type="button" class="big-btn break-end" id="lineBreakEndBtn">休憩終了</button>
+            </div>
+
+            <div class="sync-box">
+              <p id="syncStatus" class="sync-status">待機中</p>
+              <p>この画面のボタンは、LINEの打刻内容と同じ処理を行います。</p>
+            </div>
+          </section>
 
           <section class="panel">
-            <h2>法改正BPO機能メニュー</h2>
-            <p class="section-lead">機能を分割しました。左メニューから「法改正チェックAI」「書類自動生成」「デジタコ連携」「監査前アラート」を選択してください。</p>
+            <h2>LINE打刻履歴（最新10件）</h2>
+            <ul class="log-list" id="dailyLogs"></ul>
           </section>
         </section>
 
-        <section class="view" data-view="lawcheck">
+        <section class="view" data-view="records">
           <section class="panel">
             <div class="panel-head">
-              <h2>法改正チェックAI（2024/2025/2026対応）</h2>
-              <button type="button" class="btn btn-ghost" id="runLawCheckBtn">判定実行</button>
-            </div>
-            <form id="lawCheckForm" class="daily-form">
-              <div class="form-row">
-                <label>会社名<input id="lawCompanyName" type="text" placeholder="例: 株式会社Liive運輸" /></label>
-                <label>車両台数<input id="lawFleetSize" type="number" min="1" value="12" /></label>
+              <h2>勤怠履歴一覧</h2>
+              <div class="filters">
+                <input id="timecardMonth" type="month" />
+                <input id="employeeSearch" type="search" placeholder="社員名で検索" />
+                <button type="button" class="btn btn-ghost" id="downloadTimecardCsvBtn">CSV出力</button>
+                <button type="button" class="btn btn-ghost" id="downloadPayrollCsvBtn">社員別勤怠CSV（給与用）</button>
+                <button type="button" class="btn btn-ghost" id="downloadSiteHoursCsvBtn">現場別工数CSV（請求確認用）</button>
               </div>
-              <div class="form-row">
-                <label>ドライバー人数<input id="lawDriverCount" type="number" min="1" value="18" /></label>
-                <label>月間平均残業時間(1人あたりh)<input id="lawOvertimeAvg" type="number" min="0" step="0.5" value="32" /></label>
-              </div>
-              <div class="form-row checks-row">
-                <label><input id="lawUseSubcontract" type="checkbox" checked /> 協力会社へ再委託がある</label>
-                <label><input id="lawHasGreenPlate" type="checkbox" checked /> 緑ナンバー運行である</label>
-                <label><input id="lawHasDigitacho" type="checkbox" checked /> デジタコ導入済み</label>
-                <label><input id="lawHasIndustrialWaste" type="checkbox" checked /> 産廃収集運搬を行う</label>
-              </div>
-            </form>
-            <ul class="log-list" id="lawCheckResultList">
-              <li><p>「判定実行」で法改正対応タスクを表示します。</p></li>
-            </ul>
-          </section>
-        </section>
-
-        <section class="view" data-view="docagent">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>書類自動生成エージェント</h2>
-              <button type="button" class="btn btn-ghost" id="generateDocsBtn">書類生成</button>
             </div>
-            <div class="form-row checks-row">
-              <label><input class="doc-type" type="checkbox" value="contract" checked /> 運送契約書面</label>
-              <label><input class="doc-type" type="checkbox" value="operationRule" checked /> 運送利用管理規程</label>
-              <label><input class="doc-type" type="checkbox" value="actualCarrierLedger" checked /> 実運送体制管理簿</label>
-              <label><input class="doc-type" type="checkbox" value="wasteChecklist" checked /> 産廃携行書類チェック</label>
-            </div>
-            <textarea id="generatedDocText" rows="12" placeholder="ここに自動生成結果が表示されます"></textarea>
-            <div class="modal-actions">
-              <button type="button" class="btn" id="downloadGeneratedDocBtn">TXT保存</button>
-            </div>
-          </section>
-        </section>
-
-        <section class="view" data-view="digitacho">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>デジタコCSV取込（CSV先行）</h2>
-              <button type="button" class="btn btn-ghost" id="importDigitachoBtn">取込実行</button>
-            </div>
-            <div class="form-row">
-              <label>CSVファイル<input id="digitachoCsvFile" type="file" accept=".csv,text/csv" /></label>
-              <label>対象月<input id="digitachoMonth" type="month" /></label>
-            </div>
-            <ul class="status-list">
-              <li><span>取込件数</span><strong id="digitachoCount">0件</strong></li>
-              <li><span>総運転時間</span><strong id="digitachoDriveHours">0h</strong></li>
-              <li><span>速度超過検知</span><strong id="digitachoSpeedOver">0件</strong></li>
-            </ul>
+            <p class="section-lead">Liiveは給与/請求を直接計算せず、既存ツールへ渡すための正しい元データを作成します。</p>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>日付</th>
-                    <th>運転者</th>
-                    <th>車両</th>
-                    <th>運転時間</th>
-                    <th>休息時間</th>
-                    <th>速度超過</th>
+                    <th>社員</th>
+                    <th>現場/ルート</th>
+                    <th>出勤</th>
+                    <th>退勤</th>
+                    <th>労働</th>
+                    <th>休憩</th>
+                    <th>残業</th>
+                    <th>遅刻</th>
                   </tr>
                 </thead>
-                <tbody id="digitachoBody"></tbody>
+                <tbody id="timecardTableBody"></tbody>
               </table>
             </div>
           </section>
         </section>
 
-        <section class="view" data-view="auditalert">
+        <section class="view" data-view="summary">
           <section class="panel">
-            <div class="panel-head">
-              <h2>監査前アラートAI</h2>
-              <button type="button" class="btn btn-ghost" id="runAuditAlertBtn">点検実行</button>
-            </div>
-            <p class="section-lead">許可期限・勤怠・デジタコを横断し、監査前に不足/異常を抽出します。</p>
-            <ul class="log-list" id="auditAlertList">
-              <li><p>「点検実行」で監査前アラートを表示します。</p></li>
-            </ul>
-          </section>
-        </section>
-
-        <section class="view" data-view="daily">
-          <section class="panel">
-            <h2>LINE / LINE WORKS勤怠連携 → PC自動反映デモ</h2>
-            <div class="line-sync-wrap">
-              <article class="line-phone">
-                <header class="line-phone-head">LINE / WORKS 勤怠ボット</header>
-                <div class="line-chat">
-                  <div class="bubble system">本日の勤怠操作を選択してください</div>
-                  <div class="bubble user">現場に到着しました</div>
-                  <div class="bubble system">「出勤しました」を押してください</div>
-                </div>
-                <div class="line-form">
-                  <label>
-                    社員名
-                    <select id="lineEmployee"></select>
-                  </label>
-                  <label>
-                    現場
-                    <select id="lineSite"></select>
-                  </label>
-                  <div class="line-action-row">
-                    <button type="button" class="btn" id="lineCheckInBtn">出勤しました</button>
-                    <button type="button" class="btn btn-ghost" id="lineCheckOutBtn">退勤しました</button>
-                  </div>
-                  <div class="line-action-row">
-                    <button type="button" class="btn btn-ghost" id="lineBreakStartBtn">休憩開始</button>
-                    <button type="button" class="btn btn-ghost" id="lineBreakEndBtn">休憩終了</button>
-                  </div>
-                </div>
-              </article>
-
-              <article class="line-sync-panel">
-                <h3>PCツール反映状況</h3>
-                <p class="sync-badge" id="syncStatus">待機中</p>
-                <ul class="status-list">
-                  <li><span>社員</span><strong id="syncEmployee">-</strong></li>
-                  <li><span>現場</span><strong id="syncSite">-</strong></li>
-                  <li><span>状態</span><strong id="syncAction">-</strong></li>
-                  <li><span>時刻</span><strong id="syncTime">-</strong></li>
-                </ul>
-                <p class="section-lead">LINE/LINE WORKSのボタン操作が、勤怠表・出面表・シフトに自動反映されます。</p>
-              </article>
-            </div>
-          </section>
-
-          <section class="panel">
-            <h2>LINE連携履歴（最新5件）</h2>
-            <ul class="log-list" id="dailyLogs"></ul>
-            <p class="flash" id="dailyFlash" aria-live="polite"></p>
-          </section>
-
-          <section class="panel">
-            <div class="panel-head">
-              <h2>LINE勤怠自動集計（タイムカード置き換え）</h2>
-              <div class="filters">
-                <input id="timecardMonth" type="month" />
-                <button type="button" class="btn btn-ghost" id="downloadTimecardCsvBtn">CSV出力</button>
-              </div>
-            </div>
+            <h2>月次勤怠集計（タイムカード置換）</h2>
             <ul class="status-list">
-              <li><span>対象社員</span><strong id="timecardMemberCount">0名</strong></li>
-              <li><span>総労働時間</span><strong id="timecardTotalHours">0h</strong></li>
-              <li><span>残業時間</span><strong id="timecardOvertimeHours">0h</strong></li>
-              <li><span>総休憩時間</span><strong id="timecardBreakHours">0h</strong></li>
+              <li><span>対象社員</span><strong id="summaryMembers">0名</strong></li>
+              <li><span>総労働時間</span><strong id="summaryHours">0h</strong></li>
+              <li><span>総休憩時間</span><strong id="summaryBreak">0h</strong></li>
+              <li><span>総残業時間</span><strong id="summaryOvertime">0h</strong></li>
             </ul>
             <div class="table-wrap">
               <table>
@@ -429,397 +157,12 @@
                     <th>ステータス</th>
                   </tr>
                 </thead>
-                <tbody id="timecardSummaryBody"></tbody>
+                <tbody id="summaryBody"></tbody>
               </table>
             </div>
-          </section>
-        </section>
-
-        <section class="view" data-view="shift">
-          <section class="panel">
-            <h2>シフト管理（WBS）</h2>
-            <div class="grid-2 shift-sync-block">
-              <article class="shift-pane">
-                <h3>勤怠表（LINE反映）</h3>
-                <div class="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>日</th>
-                        <th>現場</th>
-                        <th>開始</th>
-                        <th>終了</th>
-                        <th>工数</th>
-                      </tr>
-                    </thead>
-                    <tbody id="attendanceBody"></tbody>
-                  </table>
-                </div>
-              </article>
-              <article class="shift-pane">
-                <h3>出面表（LINE反映）</h3>
-                <div class="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>職長名</th>
-                        <th>累計工数</th>
-                        <th>本日</th>
-                        <th>原価</th>
-                      </tr>
-                    </thead>
-                    <tbody id="laborBody"></tbody>
-                  </table>
-                </div>
-              </article>
-            </div>
-            <form id="shiftForm" class="daily-form">
-              <div class="form-row">
-                <label>
-                  担当
-                  <select id="shiftOwner"></select>
-                </label>
-                <label>
-                  タスク名
-                  <input id="shiftTask" type="text" placeholder="例: 見積作成" />
-                </label>
-              </div>
-              <div class="form-row">
-                <label>
-                  開始日
-                  <input id="shiftStartDate" type="date" />
-                </label>
-                <label>
-                  終了日
-                  <input id="shiftEndDate" type="date" />
-                </label>
-              </div>
-              <div class="form-row">
-                <label>
-                  予定工数(h)
-                  <input id="shiftPlanHours" type="number" min="1" step="0.5" value="8" />
-                </label>
-                <label>
-                  実績工数(h)
-                  <input id="shiftActualHours" type="number" min="0" step="0.5" value="0" />
-                </label>
-              </div>
-              <button type="submit" class="btn btn-ghost">シフト追加</button>
-            </form>
-            <div class="shift-layout">
-              <article class="shift-pane">
-                <h3>シフト一覧（期間・進捗）</h3>
-                <div id="shiftCards"></div>
-              </article>
-              <article class="shift-pane">
-                <h3>週間ボード（誰が・いつ）</h3>
-                <div class="table-wrap">
-                  <table class="week-table">
-                    <thead id="shiftWeekHeader"></thead>
-                    <tbody id="shiftWeekBody"></tbody>
-                  </table>
-                </div>
-              </article>
-            </div>
-          </section>
-        </section>
-
-        <section class="view" data-view="report">
-          <section class="panel report-toolbar">
-            <div class="filters report-filters">
-              <label>年度
-                <select id="filterYear">
-                  <option>2026</option>
-                  <option>2025</option>
-                </select>
-              </label>
-              <label>開始月
-                <select id="filterStartMonth">
-                  <option>4月</option>
-                  <option>1月</option>
-                  <option>7月</option>
-                </select>
-              </label>
-              <label>終了月
-                <select id="filterEndMonth">
-                  <option>翌3月</option>
-                  <option>12月</option>
-                </select>
-              </label>
-              <label>部門
-                <select id="filterDept">
-                  <option>全て</option>
-                  <option>営業</option>
-                  <option>工事</option>
-                </select>
-              </label>
-              <label>担当者
-                <select id="filterOwner">
-                  <option>全員</option>
-                </select>
-              </label>
-              <button type="button" class="btn" id="applyReportFilterBtn">表示</button>
-            </div>
-          </section>
-
-          <section class="panel">
-            <div class="panel-head">
-              <h2>収支レポート（案件別）</h2>
-              <div class="filters">
-                <select id="reportMonth">
-                  <option value="all">全期間</option>
-                </select>
-                <button type="button" class="btn btn-ghost" id="downloadCsvBtn">CSV出力</button>
-              </div>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>案件名</th>
-                    <th>売上予定</th>
-                    <th>原価実績</th>
-                    <th>粗利</th>
-                    <th>粗利率</th>
-                  </tr>
-                </thead>
-                <tbody id="reportBody"></tbody>
-              </table>
-            </div>
-          </section>
-          <section class="panel">
-            <h2>レポート要約</h2>
-            <p id="reportSummary"></p>
-          </section>
-
-          <section class="grid-2">
-            <article class="panel">
-              <h2>営業成績管理</h2>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>担当</th>
-                      <th>案件数</th>
-                      <th>完了数</th>
-                      <th>完了率</th>
-                      <th>売上合計</th>
-                    </tr>
-                  </thead>
-                  <tbody id="salesPerformanceBody"></tbody>
-                </table>
-              </div>
-            </article>
-
-            <article class="panel">
-              <h2>社員成績管理</h2>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>社員</th>
-                      <th>担当案件</th>
-                      <th>粗利合計</th>
-                      <th>平均進捗</th>
-                    </tr>
-                  </thead>
-                  <tbody id="employeePerformanceBody"></tbody>
-                </table>
-              </div>
-            </article>
-          </section>
-
-          <section class="grid-2">
-            <article class="panel">
-              <h2>予実管理</h2>
-              <div class="form-row">
-                <label>
-                  対象月
-                  <input id="budgetMonth" type="month" />
-                </label>
-                <label>
-                  売上予算（円）
-                  <input id="monthlyBudget" type="number" min="0" step="10000" />
-                </label>
-              </div>
-              <div class="modal-actions">
-                <button type="button" class="btn btn-ghost" id="saveBudgetBtn">予算を保存</button>
-              </div>
-              <ul class="status-list">
-                <li><span>予算</span><strong id="budgetValue">¥0</strong></li>
-                <li><span>実績売上</span><strong id="actualSalesValue">¥0</strong></li>
-                <li><span>達成率</span><strong id="budgetRateValue">0%</strong></li>
-              </ul>
-            </article>
-
-            <article class="panel">
-              <h2>顧客分析</h2>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>顧客</th>
-                      <th>案件数</th>
-                      <th>売上合計</th>
-                      <th>粗利率</th>
-                    </tr>
-                  </thead>
-                  <tbody id="customerAnalysisBody"></tbody>
-                </table>
-              </div>
-            </article>
-          </section>
-        </section>
-
-        <section class="view" data-view="invoice">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>一括請求書作成</h2>
-              <div class="filters">
-                <button type="button" class="btn btn-ghost" id="bulkInvoiceCsvBtn">全社分CSV出力</button>
-              </div>
-            </div>
-            <form id="invoiceForm" class="daily-form">
-              <div class="form-row">
-                <label>請求月（自動入力）
-                  <input id="invoiceMonth" type="month" />
-                </label>
-                <label>請求日
-                  <input id="invoiceIssueDate" type="date" />
-                </label>
-              </div>
-              <div class="form-row">
-                <label>請求先会社名
-                  <input id="invoiceCompany" type="text" list="invoiceCompanyList" placeholder="例: 品川産業" />
-                  <datalist id="invoiceCompanyList"></datalist>
-                </label>
-                <label>請求書番号
-                  <input id="invoiceNo" type="text" placeholder="自動生成されます" />
-                </label>
-              </div>
-              <div class="modal-actions">
-                <button type="button" class="btn" id="generateInvoiceBtn">案件から自動生成</button>
-                <button type="button" class="btn btn-ghost" id="printInvoiceBtn">請求書を印刷</button>
-                <button type="button" class="btn btn-ghost" id="downloadInvoiceDetailCsvBtn">明細CSV出力</button>
-              </div>
-            </form>
-          </section>
-
-          <section class="panel">
-            <h2>請求書プレビュー</h2>
-            <article class="invoice-sheet" id="invoiceSheet">
-              <header class="invoice-head">
-                <div>
-                  <h3>請求書</h3>
-                  <p id="invoicePreviewNo">No: -</p>
-                </div>
-                <div class="invoice-meta">
-                  <p>請求日: <span id="invoicePreviewIssueDate">-</span></p>
-                  <p>請求月: <span id="invoicePreviewMonth">-</span></p>
-                </div>
-              </header>
-              <p class="invoice-company"><strong id="invoicePreviewCompany">御中</strong></p>
-              <p class="section-lead">下記の通りご請求申し上げます。</p>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>案件/品目</th>
-                      <th>数量</th>
-                      <th>単価</th>
-                      <th>金額</th>
-                    </tr>
-                  </thead>
-                  <tbody id="invoiceItemsBody"></tbody>
-                </table>
-              </div>
-              <ul class="status-list invoice-summary">
-                <li><span>小計</span><strong id="invoiceSubTotal">¥0</strong></li>
-                <li><span>消費税(10%)</span><strong id="invoiceTax">¥0</strong></li>
-                <li><span>請求合計</span><strong id="invoiceTotal">¥0</strong></li>
-              </ul>
-            </article>
           </section>
         </section>
       </main>
-    </div>
-    <div
-      class="modal-backdrop"
-      id="projectModalBackdrop"
-      hidden
-      onclick="if(event.target===this){this.hidden=true;}"
-    >
-      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
-        <header class="modal-head">
-          <h2 id="projectModalTitle">案件を追加</h2>
-          <button
-            type="button"
-            class="icon-btn"
-            id="projectModalClose"
-            aria-label="閉じる"
-            onclick="document.getElementById('projectModalBackdrop').hidden=true;"
-          >
-            ×
-          </button>
-        </header>
-        <form id="projectForm" class="project-form">
-          <input type="hidden" id="projectId" />
-          <label>
-            案件名
-            <input id="projectName" type="text" />
-          </label>
-          <div class="form-row">
-            <label>
-              顧客名
-              <input id="projectCustomer" type="text" />
-            </label>
-            <label>
-              担当者
-              <input id="projectOwner" type="text" />
-            </label>
-            <label>
-              ステータス
-              <select id="projectFormStatus">
-                <option value="進行中">進行中</option>
-                <option value="見積中">見積中</option>
-                <option value="完了">完了</option>
-              </select>
-            </label>
-          </div>
-          <div class="form-row">
-            <label>
-              売上予定
-              <input id="projectSales" type="number" min="0" step="1000" />
-            </label>
-            <label>
-              原価実績
-              <input id="projectCost" type="number" min="0" step="1000" />
-            </label>
-          </div>
-          <div class="form-row">
-            <label>
-              進捗（%）
-              <input id="projectProgress" type="number" min="0" max="100" step="5" value="0" />
-            </label>
-            <label>
-              期日
-              <input id="projectDueDate" type="date" />
-            </label>
-          </div>
-          <p class="form-error" id="projectFormError" aria-live="polite"></p>
-          <div class="modal-actions">
-            <button
-              type="button"
-              class="btn btn-ghost"
-              id="projectModalCancel"
-              onclick="document.getElementById('projectModalBackdrop').hidden=true;"
-            >
-              キャンセル
-            </button>
-            <button type="submit" class="btn">保存</button>
-          </div>
-        </form>
-      </section>
     </div>
     <script src="./app.v3.js"></script>
   </body>
