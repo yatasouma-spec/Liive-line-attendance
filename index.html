@@ -333,6 +333,32 @@
               </table>
             </div>
           </section>
+
+          <section class="panel">
+            <h2>LINEユーザー紐付け（1分設定）</h2>
+            <p class="section-lead">社員がLINEで1回送信すると、ここに候補表示されます。社員・ルートを選んで保存してください。</p>
+            <form id="lineMapForm" class="shift-form">
+              <input id="lineUserIdInput" type="text" placeholder="LINE userId (Uから始まる文字列)" required />
+              <select id="lineMapEmployee" required></select>
+              <select id="lineMapRoute" required></select>
+              <button type="submit" class="btn">紐付け保存</button>
+            </form>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>LINE userId</th>
+                    <th>最終受信</th>
+                    <th>最終メッセージ</th>
+                    <th>紐付け社員</th>
+                    <th>ルート</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="lineUsersBody"></tbody>
+              </table>
+            </div>
+          </section>
         </section>
       </main>
     </div>

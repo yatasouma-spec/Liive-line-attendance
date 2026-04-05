@@ -25,7 +25,14 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
 
   const payload = safeJsonParse(body.toString("utf8"), { events: [] });
   for (const event of payload.events || []) {
+    const userId = event.source?.userId || "unknown";
+    const text = (event.message?.text || "").trim();
+    const dbForUser = readDb();
+    registerSeenLineUser(dbForUser, userId, text);
+    writeDb(dbForUser);
+
     if (event.type === "follow") {
+      console.log(`[LINE][follow] userId=${userId}`);
       await sendLineReply(
         event.replyToken,
         "友だち追加ありがとうございます。下のボタンから勤怠打刻してください。",
@@ -34,11 +41,13 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       continue;
     }
     if (event.type !== "message" || event.message?.type !== "text") continue;
-    const userId = event.source?.userId || "unknown";
-    const text = (event.message.text || "").trim();
-    const profile = LINE_USER_MAP[userId] || {};
+    const db = readDb();
+    const profile = db.userMap?.[userId] || LINE_USER_MAP[userId] || {};
     const employee = profile.employee || `LINE-${userId.slice(-4)}`;
     const site = profile.site || "LINE現場";
+    console.log(
+      `[LINE][message] userId=${userId} mapped=${profile.employee ? "yes" : "no"} employee=${employee} text=${text}`
+    );
 
     if (text === "メニュー" || text === "menu") {
       await sendLineReply(event.replyToken, "勤怠メニューです。ボタンを押してください。", {
@@ -91,6 +100,35 @@ app.post("/api/line-action", (req, res) => {
   }
   const snapshot = processLineAction({ employee, site, action, source: "WEB" });
   res.json({ ok: true, snapshot });
+});
+
+app.get("/api/line/users", (_req, res) => {
+  const db = readDb();
+  const seen = db.lineUsersSeen || {};
+  const mergedUserMap = { ...(LINE_USER_MAP || {}), ...(db.userMap || {}) };
+  const users = Object.keys(seen).map((userId) => ({
+    userId,
+    lastSeenAt: seen[userId]?.lastSeenAt || null,
+    lastText: seen[userId]?.lastText || "",
+    employee: mergedUserMap[userId]?.employee || "",
+    site: mergedUserMap[userId]?.site || "",
+  }));
+  users.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
+  res.json({ ok: true, users });
+});
+
+app.post("/api/line/users/map", (req, res) => {
+  const { userId, employee, site } = req.body || {};
+  if (!userId || !employee || !site) {
+    return res.status(400).json({ ok: false, error: "userId/employee/site are required" });
+  }
+  const db = readDb();
+  db.userMap = db.userMap || {};
+  db.userMap[userId] = { employee, site };
+  registerSeenLineUser(db, userId, "");
+  writeDb(db);
+  console.log(`[LINE][map] userId=${userId} -> employee=${employee} site=${site}`);
+  res.json({ ok: true });
 });
 
 app.post("/api/compliance/check", (req, res) => {
@@ -266,6 +304,15 @@ function toJstParts(date) {
   };
 }
 
+function registerSeenLineUser(db, userId, text) {
+  if (!db || !userId || userId === "unknown") return;
+  db.lineUsersSeen = db.lineUsersSeen || {};
+  db.lineUsersSeen[userId] = {
+    lastSeenAt: new Date().toISOString(),
+    lastText: text || db.lineUsersSeen[userId]?.lastText || "",
+  };
+}
+
 function verifyLineSignature(rawBody, signature) {
   if (!LINE_CHANNEL_SECRET) return true;
   if (!signature) return false;
@@ -326,6 +373,8 @@ function ensureDataFile() {
       lineSync: null,
       logs: [],
       timecards: [],
+      userMap: {},
+      lineUsersSeen: {},
     });
   }
 }
@@ -334,9 +383,16 @@ function readDb() {
   try {
     const raw = fs.readFileSync(DB_FILE, "utf8");
     const parsed = safeJsonParse(raw, null);
-    if (parsed && typeof parsed === "object") return parsed;
+    if (parsed && typeof parsed === "object") {
+      parsed.checkins = parsed.checkins || {};
+      parsed.logs = Array.isArray(parsed.logs) ? parsed.logs : [];
+      parsed.timecards = Array.isArray(parsed.timecards) ? parsed.timecards : [];
+      parsed.userMap = parsed.userMap || {};
+      parsed.lineUsersSeen = parsed.lineUsersSeen || {};
+      return parsed;
+    }
   } catch (_e) {}
-  return { checkins: {}, lineSync: null, logs: [], timecards: [] };
+  return { checkins: {}, lineSync: null, logs: [], timecards: [], userMap: {}, lineUsersSeen: {} };
 }
 
 function writeDb(data) {

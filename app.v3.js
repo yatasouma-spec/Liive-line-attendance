@@ -62,6 +62,7 @@ const state = {
   auditTrail: loadJson(AUDIT_KEY, []),
   employeeSearch: "",
   currentGps: null,
+  lineUsers: [],
 };
 
 const viewTitle = {
@@ -334,7 +335,7 @@ function populateSelectors() {
   const routeOptions = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
   const vehicleOptions = activeVehicles().map((v) => `<option value="${v.id}">${v.plate} ${v.name}</option>`).join("");
 
-  ["lineEmployee", "shiftEmployee", "assignEmployee"].forEach((id) => {
+  ["lineEmployee", "shiftEmployee", "assignEmployee", "lineMapEmployee"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
@@ -342,7 +343,7 @@ function populateSelectors() {
     if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
   });
 
-  ["lineSite", "shiftRoute"].forEach((id) => {
+  ["lineSite", "shiftRoute", "lineMapRoute"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
@@ -587,6 +588,7 @@ function renderMasters() {
   const vehicleBody = document.getElementById("vehicleMasterBody");
   const assignBody = document.getElementById("driverVehicleBody");
   const shiftBody = document.getElementById("shiftPlanBody");
+  const lineUsersBody = document.getElementById("lineUsersBody");
 
   if (empBody) {
     empBody.innerHTML = state.employees
@@ -665,6 +667,25 @@ function renderMasters() {
     </tr>`
       )
       .join("");
+  }
+
+  if (lineUsersBody) {
+    lineUsersBody.innerHTML = state.lineUsers.length
+      ? state.lineUsers
+          .map(
+            (u) => `<tr>
+      <td>${u.userId}</td>
+      <td>${u.lastSeenAt || "-"}</td>
+      <td>${u.lastText || "-"}</td>
+      <td>${u.employee || "-"}</td>
+      <td>${u.site || "-"}</td>
+      <td>
+        <button class="btn btn-ghost" data-fill-line-user="${u.userId}">このIDを入力</button>
+      </td>
+    </tr>`
+          )
+          .join("")
+      : '<tr><td class="empty" colspan="6">まだLINE送信履歴がありません</td></tr>';
   }
 }
 
@@ -1020,6 +1041,34 @@ async function pullSnapshot() {
   } catch (_e) {}
 }
 
+async function fetchLineUsers() {
+  if (!API_ENABLED) return;
+  try {
+    const data = await apiRequest("/api/line/users");
+    if (!data?.ok) return;
+    state.lineUsers = Array.isArray(data.users) ? data.users : [];
+    renderMasters();
+  } catch (_e) {}
+}
+
+async function saveLineUserMapping(userId, employee, site) {
+  if (!API_ENABLED) {
+    alert("http/https環境で実行してください（file://は不可）");
+    return;
+  }
+  try {
+    const data = await apiRequest("/api/line/users/map", {
+      method: "POST",
+      body: JSON.stringify({ userId, employee, site }),
+    });
+    if (!data?.ok) throw new Error("save failed");
+    await fetchLineUsers();
+    alert("LINEユーザー紐付けを保存しました");
+  } catch (_e) {
+    alert("保存に失敗しました");
+  }
+}
+
 async function lineAction(action) {
   const employee = document.getElementById("lineEmployee")?.value;
   const site = document.getElementById("lineSite")?.value;
@@ -1229,6 +1278,24 @@ function bindMasterEvents() {
     state.shiftPlans = state.shiftPlans.filter((s) => s.id !== id);
     renderAll();
   });
+
+  document.getElementById("lineMapForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const userId = document.getElementById("lineUserIdInput")?.value.trim();
+    const employee = document.getElementById("lineMapEmployee")?.value;
+    const site = document.getElementById("lineMapRoute")?.value;
+    if (!userId || !employee || !site) return;
+    await saveLineUserMapping(userId, employee, site);
+  });
+
+  document.getElementById("lineUsersBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const userId = target.getAttribute("data-fill-line-user");
+    if (!userId) return;
+    const input = document.getElementById("lineUserIdInput");
+    if (input) input.value = userId;
+  });
 }
 
 function bindEvents() {
@@ -1312,7 +1379,9 @@ function init() {
   renderAll();
   if (API_ENABLED) {
     pullSnapshot();
+    fetchLineUsers();
     setInterval(pullSnapshot, API_POLL_MS);
+    setInterval(fetchLineUsers, API_POLL_MS * 2);
   }
 }
 
