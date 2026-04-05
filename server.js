@@ -12,6 +12,7 @@ const DB_FILE = path.join(DATA_DIR, "line-attendance.json");
 const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
 const LINE_USER_MAP = safeJsonParse(process.env.LINE_USER_MAP_JSON, {});
+const APP_TIMEZONE = "Asia/Tokyo";
 
 ensureDataFile();
 
@@ -145,8 +146,9 @@ function actionLabel(action) {
 
 function processLineAction({ employee, site, action, source }) {
   const now = new Date();
-  const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  const date = now.toISOString().slice(0, 10);
+  const nowJst = toJstParts(now);
+  const time = nowJst.time;
+  const date = nowJst.date;
 
   const db = readDb();
   const userCheckin = db.checkins[employee];
@@ -154,6 +156,7 @@ function processLineAction({ employee, site, action, source }) {
   if (action === "checkin") {
     db.checkins[employee] = {
       checkInISO: now.toISOString(),
+      checkInMinutes: nowJst.minutes,
       breakStartISO: null,
       totalBreakMin: 0,
       site,
@@ -198,13 +201,14 @@ function processLineAction({ employee, site, action, source }) {
       const rawHours = (now.getTime() - checkInAt.getTime()) / 3600000;
       const hours = Math.max(0.5, Number((rawHours - breakMin / 60).toFixed(1)));
       const overtime = Math.max(0, Number((hours - 8).toFixed(1)));
-      const isLate = checkInAt.getHours() * 60 + checkInAt.getMinutes() > 9 * 60;
+      const isLate = Number(userCheckin.checkInMinutes || 0) > 9 * 60;
+      const checkInJst = toJstParts(checkInAt);
 
       db.timecards.push({
         date,
         employee,
         site: userCheckin.site || site,
-        checkIn: `${String(checkInAt.getHours()).padStart(2, "0")}:${String(checkInAt.getMinutes()).padStart(2, "0")}`,
+        checkIn: checkInJst.time,
         checkOut: time,
         hours,
         breakMin,
@@ -234,6 +238,31 @@ function processLineAction({ employee, site, action, source }) {
     lineSync: db.lineSync,
     logs: db.logs.slice(-200),
     timecards: db.timecards.slice(-1000),
+  };
+}
+
+function toJstParts(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const take = (type) => parts.find((p) => p.type === type)?.value || "00";
+  const year = take("year");
+  const month = take("month");
+  const day = take("day");
+  const hour = take("hour");
+  const minute = take("minute");
+
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}`,
+    minutes: Number(hour) * 60 + Number(minute),
   };
 }
 
