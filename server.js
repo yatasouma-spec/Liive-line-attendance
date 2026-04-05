@@ -138,6 +138,20 @@ app.post("/api/line/users/map", (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/line/users/unmap", (req, res) => {
+  const { userId } = req.body || {};
+  if (!userId) {
+    return res.status(400).json({ ok: false, error: "userId is required" });
+  }
+  const db = readDb();
+  db.userMap = db.userMap || {};
+  if (db.userMap[userId]) {
+    delete db.userMap[userId];
+    writeDb(db);
+  }
+  res.json({ ok: true });
+});
+
 app.post("/api/line/users/rename", (req, res) => {
   const { oldName, newName, employeeId } = req.body || {};
   if (!oldName || !newName) return res.status(400).json({ ok: false, error: "oldName/newName are required" });

@@ -63,6 +63,7 @@ const state = {
   employeeSearch: "",
   currentGps: null,
   lineUsers: [],
+  editingShiftId: "",
 };
 
 const viewTitle = {
@@ -138,6 +139,50 @@ function getVehicleNameByEmployee(employeeName) {
   if (!vehicleId) return "-";
   const vehicle = getVehicleById(vehicleId);
   return vehicle ? `${vehicle.plate} ${vehicle.name}` : "-";
+}
+
+function normalizeText(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function renameEmployeeReferences(oldName, newName) {
+  if (!oldName || !newName || oldName === newName) return;
+  state.logs.forEach((row) => {
+    if (row.employee === oldName) row.employee = newName;
+  });
+  state.timecards.forEach((row) => {
+    if (row.employee === oldName) row.employee = newName;
+  });
+  state.shiftPlans.forEach((row) => {
+    if (row.employee === oldName) row.employee = newName;
+  });
+  state.pendingCorrections.forEach((row) => {
+    if (row.employee === oldName) row.employee = newName;
+  });
+  Object.values(state.approvedCorrectionMap || {}).forEach((row) => {
+    if (row && row.employee === oldName) row.employee = newName;
+  });
+  if (state.openSessions[oldName]) {
+    state.openSessions[newName] = state.openSessions[oldName];
+    delete state.openSessions[oldName];
+  }
+}
+
+function renameRouteReferences(oldRoute, newRoute) {
+  if (!oldRoute || !newRoute || oldRoute === newRoute) return;
+  state.logs.forEach((row) => {
+    if (row.site === oldRoute) row.site = newRoute;
+  });
+  state.timecards.forEach((row) => {
+    if (row.site === oldRoute) row.site = newRoute;
+  });
+  state.shiftPlans.forEach((row) => {
+    if (row.route === oldRoute) row.route = newRoute;
+  });
+  Object.values(state.openSessions || {}).forEach((row) => {
+    if (row && row.site === oldRoute) row.site = newRoute;
+  });
 }
 
 function sourceKey(row) {
@@ -606,8 +651,9 @@ function renderMasters() {
       <td>${e.name}</td>
       <td><span class="badge ${e.active ? "ok" : "warn"}">${e.active ? "有効" : "無効"}</span></td>
       <td>
-        <button class="btn btn-ghost" data-edit-emp="${e.id}">名前変更</button>
+        <button class="btn btn-ghost" data-edit-emp="${e.id}">編集</button>
         <button class="btn btn-ghost" data-toggle-emp="${e.id}">${e.active ? "無効化" : "有効化"}</button>
+        <button class="btn btn-ghost" data-delete-emp="${e.id}">削除</button>
       </td>
     </tr>`
       )
@@ -621,8 +667,9 @@ function renderMasters() {
       <td>${r.name}</td>
       <td><span class="badge ${r.active ? "ok" : "warn"}">${r.active ? "有効" : "無効"}</span></td>
       <td>
-        <button class="btn btn-ghost" data-edit-route="${r.id}">名称変更</button>
+        <button class="btn btn-ghost" data-edit-route="${r.id}">編集</button>
         <button class="btn btn-ghost" data-toggle-route="${r.id}">${r.active ? "無効化" : "有効化"}</button>
+        <button class="btn btn-ghost" data-delete-route="${r.id}">削除</button>
       </td>
     </tr>`
       )
@@ -637,8 +684,9 @@ function renderMasters() {
       <td>${v.name}</td>
       <td><span class="badge ${v.active ? "ok" : "warn"}">${v.active ? "有効" : "無効"}</span></td>
       <td>
-        <button class="btn btn-ghost" data-edit-vehicle="${v.id}">名称変更</button>
+        <button class="btn btn-ghost" data-edit-vehicle="${v.id}">編集</button>
         <button class="btn btn-ghost" data-toggle-vehicle="${v.id}">${v.active ? "無効化" : "有効化"}</button>
+        <button class="btn btn-ghost" data-delete-vehicle="${v.id}">削除</button>
       </td>
     </tr>`
       )
@@ -671,7 +719,10 @@ function renderMasters() {
       <td>${s.start}</td>
       <td>${s.end}</td>
       <td>${s.route}</td>
-      <td><button class="btn btn-ghost" data-delete-shift="${s.id}">削除</button></td>
+      <td>
+        <button class="btn btn-ghost" data-edit-shift="${s.id}">編集</button>
+        <button class="btn btn-ghost" data-delete-shift="${s.id}">削除</button>
+      </td>
     </tr>`
       )
       .join("");
@@ -689,6 +740,7 @@ function renderMasters() {
       <td>${u.site || "-"}</td>
       <td>
         <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}">このIDを入力</button>
+        <button class="btn btn-ghost" data-unmap-line-user="${u.userId}">紐付け解除</button>
       </td>
     </tr>`
           )
@@ -1077,6 +1129,24 @@ async function saveLineUserMapping(userId, employeeId, employeeName, site) {
   }
 }
 
+async function unmapLineUser(userId) {
+  if (!API_ENABLED) {
+    alert("http/https環境で実行してください（file://は不可）");
+    return;
+  }
+  try {
+    const data = await apiRequest("/api/line/users/unmap", {
+      method: "POST",
+      body: JSON.stringify({ userId }),
+    });
+    if (!data?.ok) throw new Error("unmap failed");
+    await fetchLineUsers();
+    alert("LINEユーザー紐付けを解除しました");
+  } catch (_e) {
+    alert("紐付け解除に失敗しました");
+  }
+}
+
 async function renameLineMappings(oldName, newName, employeeId) {
   if (!API_ENABLED) return;
   try {
@@ -1195,11 +1265,15 @@ function captureGps() {
 function bindMasterEvents() {
   document.getElementById("employeeForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    const code = document.getElementById("employeeCode").value.trim();
-    const name = document.getElementById("employeeName").value.trim();
+    const code = normalizeText(document.getElementById("employeeCode").value);
+    const name = normalizeText(document.getElementById("employeeName").value);
     if (!code || !name) return;
-    if (state.employees.some((x) => x.code === code)) {
+    if (state.employees.some((x) => normalizeText(x.code) === code)) {
       alert("同じ社員コードがあります");
+      return;
+    }
+    if (state.employees.some((x) => normalizeText(x.name) === name)) {
+      alert("同じ社員名があります");
       return;
     }
     state.employees.push({ id: uid("e"), code, name, active: true });
@@ -1210,8 +1284,12 @@ function bindMasterEvents() {
 
   document.getElementById("routeForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    const name = document.getElementById("routeName").value.trim();
+    const name = normalizeText(document.getElementById("routeName").value);
     if (!name) return;
+    if (state.routes.some((x) => normalizeText(x.name) === name)) {
+      alert("同じルート名があります");
+      return;
+    }
     state.routes.push({ id: uid("r"), name, active: true });
     document.getElementById("routeName").value = "";
     renderAll();
@@ -1219,9 +1297,13 @@ function bindMasterEvents() {
 
   document.getElementById("vehicleForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    const plate = document.getElementById("vehiclePlate").value.trim();
-    const name = document.getElementById("vehicleName").value.trim();
+    const plate = normalizeText(document.getElementById("vehiclePlate").value);
+    const name = normalizeText(document.getElementById("vehicleName").value);
     if (!plate || !name) return;
+    if (state.vehicles.some((x) => normalizeText(x.plate) === plate)) {
+      alert("同じ車両番号があります");
+      return;
+    }
     state.vehicles.push({ id: uid("v"), plate, name, active: true });
     document.getElementById("vehiclePlate").value = "";
     document.getElementById("vehicleName").value = "";
@@ -1247,14 +1329,28 @@ function bindMasterEvents() {
     const route = document.getElementById("shiftRoute").value;
     if (!date || !employee || !start || !end || !route) return;
 
-    const existing = state.shiftPlans.find((s) => s.date === date && s.employee === employee);
-    if (existing) {
-      existing.start = start;
-      existing.end = end;
-      existing.route = route;
+    if (state.editingShiftId) {
+      const editing = state.shiftPlans.find((s) => s.id === state.editingShiftId);
+      if (editing) {
+        editing.date = date;
+        editing.employee = employee;
+        editing.start = start;
+        editing.end = end;
+        editing.route = route;
+      }
+      state.editingShiftId = "";
     } else {
-      state.shiftPlans.push({ id: uid("s"), date, employee, start, end, route });
+      const existing = state.shiftPlans.find((s) => s.date === date && s.employee === employee);
+      if (existing) {
+        existing.start = start;
+        existing.end = end;
+        existing.route = route;
+      } else {
+        state.shiftPlans.push({ id: uid("s"), date, employee, start, end, route });
+      }
     }
+    const submitBtn = document.querySelector("#shiftPlanForm button[type='submit']");
+    if (submitBtn) submitBtn.textContent = "シフト登録";
     renderAll();
     syncShiftPlansToServer();
   });
@@ -1274,12 +1370,44 @@ function bindMasterEvents() {
     if (editId) {
       const row = state.employees.find((x) => x.id === editId);
       if (!row) return;
-      const next = window.prompt("社員名を変更", row.name);
-      if (!next) return;
+      const nextCode = normalizeText(window.prompt("社員コードを変更", row.code));
+      const nextName = normalizeText(window.prompt("社員名を変更", row.name));
+      if (!nextCode || !nextName) return;
+      if (state.employees.some((x) => x.id !== row.id && normalizeText(x.code) === nextCode)) {
+        alert("同じ社員コードがあります");
+        return;
+      }
+      if (state.employees.some((x) => x.id !== row.id && normalizeText(x.name) === nextName)) {
+        alert("同じ社員名があります");
+        return;
+      }
       const beforeName = row.name;
-      row.name = next.trim();
+      row.code = nextCode;
+      row.name = nextName;
+      renameEmployeeReferences(beforeName, row.name);
       renderAll();
       renameLineMappings(beforeName, row.name, row.id);
+      return;
+    }
+    const deleteId = target.getAttribute("data-delete-emp");
+    if (deleteId) {
+      const row = state.employees.find((x) => x.id === deleteId);
+      if (!row) return;
+      const usingShift = state.shiftPlans.filter((s) => s.employee === row.name).length;
+      const ok = window.confirm(
+        `社員「${row.name}」を削除します。\n関連シフト ${usingShift}件は同時削除されます。\nこの操作は取り消せません。`
+      );
+      if (!ok) return;
+      state.employees = state.employees.filter((x) => x.id !== row.id);
+      state.shiftPlans = state.shiftPlans.filter((s) => s.employee !== row.name);
+      delete state.driverAssignments[row.id];
+      delete state.openSessions[row.name];
+      if (state.editingShiftId) {
+        const editing = state.shiftPlans.find((s) => s.id === state.editingShiftId);
+        if (!editing) state.editingShiftId = "";
+      }
+      renderAll();
+      syncShiftPlansToServer();
     }
   });
 
@@ -1298,10 +1426,31 @@ function bindMasterEvents() {
     if (editId) {
       const row = state.routes.find((x) => x.id === editId);
       if (!row) return;
-      const next = window.prompt("ルート名を変更", row.name);
+      const next = normalizeText(window.prompt("ルート名を変更", row.name));
       if (!next) return;
-      row.name = next.trim();
+      if (state.routes.some((x) => x.id !== row.id && normalizeText(x.name) === next)) {
+        alert("同じルート名があります");
+        return;
+      }
+      const before = row.name;
+      row.name = next;
+      renameRouteReferences(before, next);
       renderAll();
+      return;
+    }
+    const deleteId = target.getAttribute("data-delete-route");
+    if (deleteId) {
+      const row = state.routes.find((x) => x.id === deleteId);
+      if (!row) return;
+      const usingShift = state.shiftPlans.filter((s) => s.route === row.name).length;
+      const ok = window.confirm(
+        `ルート「${row.name}」を削除します。\n関連シフト ${usingShift}件は同時削除されます。\nこの操作は取り消せません。`
+      );
+      if (!ok) return;
+      state.routes = state.routes.filter((x) => x.id !== row.id);
+      state.shiftPlans = state.shiftPlans.filter((s) => s.route !== row.name);
+      renderAll();
+      syncShiftPlansToServer();
     }
   });
 
@@ -1320,9 +1469,31 @@ function bindMasterEvents() {
     if (editId) {
       const row = state.vehicles.find((x) => x.id === editId);
       if (!row) return;
-      const next = window.prompt("車両名を変更", row.name);
-      if (!next) return;
-      row.name = next.trim();
+      const nextPlate = normalizeText(window.prompt("車両番号を変更", row.plate));
+      const nextName = normalizeText(window.prompt("車両名を変更", row.name));
+      if (!nextPlate || !nextName) return;
+      if (state.vehicles.some((x) => x.id !== row.id && normalizeText(x.plate) === nextPlate)) {
+        alert("同じ車両番号があります");
+        return;
+      }
+      row.plate = nextPlate;
+      row.name = nextName;
+      renderAll();
+      return;
+    }
+    const deleteId = target.getAttribute("data-delete-vehicle");
+    if (deleteId) {
+      const row = state.vehicles.find((x) => x.id === deleteId);
+      if (!row) return;
+      const usingAssignment = Object.values(state.driverAssignments).filter((vId) => vId === row.id).length;
+      const ok = window.confirm(
+        `車両「${row.plate} ${row.name}」を削除します。\nひも付け ${usingAssignment}件は解除されます。\nこの操作は取り消せません。`
+      );
+      if (!ok) return;
+      state.vehicles = state.vehicles.filter((x) => x.id !== row.id);
+      Object.keys(state.driverAssignments).forEach((empId) => {
+        if (state.driverAssignments[empId] === row.id) delete state.driverAssignments[empId];
+      });
       renderAll();
     }
   });
@@ -1339,9 +1510,33 @@ function bindMasterEvents() {
   document.getElementById("shiftPlanBody")?.addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
+    const editId = target.getAttribute("data-edit-shift");
+    if (editId) {
+      const row = state.shiftPlans.find((s) => s.id === editId);
+      if (!row) return;
+      const dateInput = document.getElementById("shiftDate");
+      const employeeInput = document.getElementById("shiftEmployee");
+      const startInput = document.getElementById("shiftStart");
+      const endInput = document.getElementById("shiftEnd");
+      const routeInput = document.getElementById("shiftRoute");
+      if (dateInput) dateInput.value = row.date;
+      if (employeeInput) employeeInput.value = row.employee;
+      if (startInput) startInput.value = row.start;
+      if (endInput) endInput.value = row.end;
+      if (routeInput) routeInput.value = row.route;
+      state.editingShiftId = row.id;
+      const submitBtn = document.querySelector("#shiftPlanForm button[type='submit']");
+      if (submitBtn) submitBtn.textContent = "シフト更新";
+      return;
+    }
     const id = target.getAttribute("data-delete-shift");
     if (!id) return;
+    const ok = window.confirm("このシフトを削除しますか？");
+    if (!ok) return;
     state.shiftPlans = state.shiftPlans.filter((s) => s.id !== id);
+    if (state.editingShiftId === id) state.editingShiftId = "";
+    const submitBtn = document.querySelector("#shiftPlanForm button[type='submit']");
+    if (submitBtn) submitBtn.textContent = "シフト登録";
     renderAll();
     syncShiftPlansToServer();
   });
@@ -1359,6 +1554,13 @@ function bindMasterEvents() {
   document.getElementById("lineUsersBody")?.addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
+    const unmapId = target.getAttribute("data-unmap-line-user");
+    if (unmapId) {
+      const ok = window.confirm(`LINE userId「${unmapId}」の紐付けを解除しますか？`);
+      if (!ok) return;
+      unmapLineUser(unmapId);
+      return;
+    }
     const userId = target.getAttribute("data-fill-line-user");
     if (!userId) return;
     const input = document.getElementById("lineUserIdInput");
