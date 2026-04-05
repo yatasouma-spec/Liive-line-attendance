@@ -309,6 +309,10 @@
           </section>
           <section class="panel">
             <h2>シフト計画管理（予定 vs 実績）</h2>
+            <div class="filters">
+              <button type="button" class="btn btn-ghost" id="sendShiftNowBtn">明日分シフトをLINE配信</button>
+              <p id="shiftDeliveryStatus" class="section-lead">まだ配信実行していません</p>
+            </div>
             <form id="shiftPlanForm" class="shift-form">
               <input id="shiftDate" type="date" required />
               <select id="shiftEmployee" required></select>

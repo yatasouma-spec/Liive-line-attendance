@@ -13,6 +13,8 @@ const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
 const LINE_USER_MAP = safeJsonParse(process.env.LINE_USER_MAP_JSON, {});
 const APP_TIMEZONE = "Asia/Tokyo";
+const SHIFT_AUTO_SEND_HOUR = Number(process.env.SHIFT_AUTO_SEND_HOUR || 18);
+const SHIFT_AUTO_SEND_MINUTE = Number(process.env.SHIFT_AUTO_SEND_MINUTE || 0);
 
 ensureDataFile();
 
@@ -43,10 +45,10 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     if (event.type !== "message" || event.message?.type !== "text") continue;
     const db = readDb();
     const profile = db.userMap?.[userId] || LINE_USER_MAP[userId] || {};
-    const employee = profile.employee || `LINE-${userId.slice(-4)}`;
+    const employee = profile.employeeName || profile.employee || `LINE-${userId.slice(-4)}`;
     const site = profile.site || "LINE現場";
     console.log(
-      `[LINE][message] userId=${userId} mapped=${profile.employee ? "yes" : "no"} employee=${employee} text=${text}`
+      `[LINE][message] userId=${userId} mapped=${profile.employeeName || profile.employee ? "yes" : "no"} employee=${employee} text=${text}`
     );
 
     if (text === "メニュー" || text === "menu") {
@@ -110,7 +112,8 @@ app.get("/api/line/users", (_req, res) => {
     userId,
     lastSeenAt: seen[userId]?.lastSeenAt || null,
     lastText: seen[userId]?.lastText || "",
-    employee: mergedUserMap[userId]?.employee || "",
+    employeeId: mergedUserMap[userId]?.employeeId || "",
+    employee: mergedUserMap[userId]?.employeeName || mergedUserMap[userId]?.employee || "",
     site: mergedUserMap[userId]?.site || "",
   }));
   users.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
@@ -118,17 +121,79 @@ app.get("/api/line/users", (_req, res) => {
 });
 
 app.post("/api/line/users/map", (req, res) => {
-  const { userId, employee, site } = req.body || {};
-  if (!userId || !employee || !site) {
-    return res.status(400).json({ ok: false, error: "userId/employee/site are required" });
+  const { userId, employeeId, employeeName, site } = req.body || {};
+  if (!userId || !employeeName || !site) {
+    return res.status(400).json({ ok: false, error: "userId/employeeName/site are required" });
   }
   const db = readDb();
   db.userMap = db.userMap || {};
-  db.userMap[userId] = { employee, site };
+  db.userMap[userId] = {
+    employeeId: employeeId || "",
+    employeeName,
+    site,
+  };
   registerSeenLineUser(db, userId, "");
   writeDb(db);
-  console.log(`[LINE][map] userId=${userId} -> employee=${employee} site=${site}`);
+  console.log(`[LINE][map] userId=${userId} -> employee=${employeeName} site=${site}`);
   res.json({ ok: true });
+});
+
+app.post("/api/line/users/rename", (req, res) => {
+  const { oldName, newName, employeeId } = req.body || {};
+  if (!oldName || !newName) return res.status(400).json({ ok: false, error: "oldName/newName are required" });
+  const db = readDb();
+  let changed = 0;
+  db.userMap = db.userMap || {};
+  Object.keys(db.userMap).forEach((userId) => {
+    const row = db.userMap[userId] || {};
+    const byId = employeeId && row.employeeId && row.employeeId === employeeId;
+    const byName = row.employeeName === oldName || row.employee === oldName;
+    if (byId || byName) {
+      db.userMap[userId] = {
+        ...row,
+        employeeId: employeeId || row.employeeId || "",
+        employeeName: newName,
+      };
+      changed += 1;
+    }
+  });
+  writeDb(db);
+  res.json({ ok: true, changed });
+});
+
+app.post("/api/shift-plans/sync", (req, res) => {
+  const plans = Array.isArray(req.body?.plans) ? req.body.plans : [];
+  const normalized = plans
+    .map((p) => ({
+      id: String(p.id || ""),
+      date: String(p.date || ""),
+      employee: String(p.employee || ""),
+      start: String(p.start || ""),
+      end: String(p.end || ""),
+      route: String(p.route || ""),
+    }))
+    .filter((p) => p.date && p.employee && p.start && p.end && p.route);
+  const db = readDb();
+  db.shiftPlans = normalized.slice(-5000);
+  writeDb(db);
+  res.json({ ok: true, count: db.shiftPlans.length });
+});
+
+app.post("/api/shift/deliver-daily", async (req, res) => {
+  const targetDate = String(req.body?.targetDate || "").trim() || getJstDateOffset(1);
+  const result = await deliverShiftByDate(targetDate, "manual");
+  res.json({ ok: true, ...result });
+});
+
+app.get("/api/shift/delivery-status", (_req, res) => {
+  const db = readDb();
+  res.json({
+    ok: true,
+    lastSentAt: db.shiftDelivery?.lastSentAt || null,
+    lastTargetDate: db.shiftDelivery?.lastTargetDate || null,
+    lastMode: db.shiftDelivery?.lastMode || null,
+    sentCount: Number(db.shiftDelivery?.lastSentCount || 0),
+  });
 });
 
 app.post("/api/compliance/check", (req, res) => {
@@ -165,6 +230,10 @@ app.listen(PORT, () => {
   console.log(`CORECA Lite server started on http://localhost:${PORT}`);
   console.log(`Webhook endpoint: http://localhost:${PORT}/line/webhook`);
 });
+
+setInterval(() => {
+  runShiftAutoDelivery().catch(() => {});
+}, 60 * 1000);
 
 function detectAction(text) {
   if (text.includes("出勤")) return "checkin";
@@ -365,6 +434,115 @@ async function sendLineReply(replyToken, text, options = {}) {
   } catch (_e) {}
 }
 
+async function sendLinePush(to, text) {
+  if (!LINE_CHANNEL_ACCESS_TOKEN || !to) return false;
+  try {
+    await fetch("https://api.line.me/v2/bot/message/push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+      },
+      body: JSON.stringify({
+        to,
+        messages: [{ type: "text", text }],
+      }),
+    });
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+function getJstDateOffset(offsetDays = 0) {
+  const now = new Date();
+  const jstNow = new Date(now.toLocaleString("en-US", { timeZone: APP_TIMEZONE }));
+  jstNow.setDate(jstNow.getDate() + offsetDays);
+  const y = jstNow.getFullYear();
+  const m = String(jstNow.getMonth() + 1).padStart(2, "0");
+  const d = String(jstNow.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getJstNowParts() {
+  const now = new Date();
+  const parts = toJstParts(now);
+  return {
+    date: parts.date,
+    hour: Number(parts.time.split(":")[0]),
+    minute: Number(parts.time.split(":")[1]),
+  };
+}
+
+function formatYmdJp(ymd) {
+  const [y, m, d] = String(ymd || "").split("-");
+  if (!y || !m || !d) return ymd;
+  return `${y}/${m}/${d}`;
+}
+
+async function deliverShiftByDate(targetDate, mode = "manual") {
+  const db = readDb();
+  const userMap = db.userMap || {};
+  const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
+  const byEmployee = new Map();
+  plans
+    .filter((p) => p.date === targetDate)
+    .forEach((p) => {
+      const key = p.employee;
+      const arr = byEmployee.get(key) || [];
+      arr.push(p);
+      byEmployee.set(key, arr);
+    });
+
+  let sentCount = 0;
+  let skippedCount = 0;
+
+  for (const [userId, profile] of Object.entries(userMap)) {
+    const employeeName = profile?.employeeName || profile?.employee || "";
+    if (!employeeName) {
+      skippedCount += 1;
+      continue;
+    }
+    const userPlans = byEmployee.get(employeeName) || [];
+    const message =
+      userPlans.length > 0
+        ? `【Liive シフト連絡】\\n対象日: ${formatYmdJp(targetDate)}\\n` +
+          userPlans
+            .map((p, i) => `${i + 1}. ${p.start}-${p.end} / ${p.route}`)
+            .join("\\n")
+        : `【Liive シフト連絡】\\n対象日: ${formatYmdJp(targetDate)}\\nシフトは未登録です。管理者に確認してください。`;
+
+    const ok = await sendLinePush(userId, message);
+    if (ok) sentCount += 1;
+    else skippedCount += 1;
+  }
+
+  db.shiftDelivery = {
+    lastSentAt: new Date().toISOString(),
+    lastSentDateJst: getJstDateOffset(0),
+    lastTargetDate: targetDate,
+    lastMode: mode,
+    lastSentCount: sentCount,
+  };
+  writeDb(db);
+  return { targetDate, sentCount, skippedCount };
+}
+
+async function runShiftAutoDelivery() {
+  const now = getJstNowParts();
+  if (now.hour !== SHIFT_AUTO_SEND_HOUR || now.minute !== SHIFT_AUTO_SEND_MINUTE) return;
+
+  const db = readDb();
+  const todayJst = getJstDateOffset(0);
+  const already =
+    db.shiftDelivery?.lastMode === "auto" &&
+    String(db.shiftDelivery?.lastSentDateJst || "") === todayJst;
+  if (already) return;
+
+  const targetDate = getJstDateOffset(1);
+  await deliverShiftByDate(targetDate, "auto");
+}
+
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) {
@@ -375,6 +553,8 @@ function ensureDataFile() {
       timecards: [],
       userMap: {},
       lineUsersSeen: {},
+      shiftPlans: [],
+      shiftDelivery: null,
     });
   }
 }
@@ -389,10 +569,12 @@ function readDb() {
       parsed.timecards = Array.isArray(parsed.timecards) ? parsed.timecards : [];
       parsed.userMap = parsed.userMap || {};
       parsed.lineUsersSeen = parsed.lineUsersSeen || {};
+      parsed.shiftPlans = Array.isArray(parsed.shiftPlans) ? parsed.shiftPlans : [];
+      parsed.shiftDelivery = parsed.shiftDelivery || null;
       return parsed;
     }
   } catch (_e) {}
-  return { checkins: {}, lineSync: null, logs: [], timecards: [], userMap: {}, lineUsersSeen: {} };
+  return { checkins: {}, lineSync: null, logs: [], timecards: [], userMap: {}, lineUsersSeen: {}, shiftPlans: [], shiftDelivery: null };
 }
 
 function writeDb(data) {

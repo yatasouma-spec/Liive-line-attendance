@@ -332,16 +332,24 @@ function computeAlerts() {
 
 function populateSelectors() {
   const employeeOptions = activeEmployees().map((e) => `<option value="${e.name}">${e.name}</option>`).join("");
+  const employeeIdOptions = activeEmployees().map((e) => `<option value="${e.id}">${e.name}</option>`).join("");
   const routeOptions = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
   const vehicleOptions = activeVehicles().map((v) => `<option value="${v.id}">${v.plate} ${v.name}</option>`).join("");
 
-  ["lineEmployee", "shiftEmployee", "assignEmployee", "lineMapEmployee"].forEach((id) => {
+  ["lineEmployee", "shiftEmployee", "assignEmployee"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
     el.innerHTML = employeeOptions;
     if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
   });
+
+  const lineMapEmployee = document.getElementById("lineMapEmployee");
+  if (lineMapEmployee) {
+    const prev = lineMapEmployee.value;
+    lineMapEmployee.innerHTML = employeeIdOptions;
+    if (prev && [...lineMapEmployee.options].some((o) => o.value === prev)) lineMapEmployee.value = prev;
+  }
 
   ["lineSite", "shiftRoute", "lineMapRoute"].forEach((id) => {
     const el = document.getElementById(id);
@@ -680,7 +688,7 @@ function renderMasters() {
       <td>${u.employee || "-"}</td>
       <td>${u.site || "-"}</td>
       <td>
-        <button class="btn btn-ghost" data-fill-line-user="${u.userId}">このIDを入力</button>
+        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}">このIDを入力</button>
       </td>
     </tr>`
           )
@@ -1051,7 +1059,7 @@ async function fetchLineUsers() {
   } catch (_e) {}
 }
 
-async function saveLineUserMapping(userId, employee, site) {
+async function saveLineUserMapping(userId, employeeId, employeeName, site) {
   if (!API_ENABLED) {
     alert("http/https環境で実行してください（file://は不可）");
     return;
@@ -1059,7 +1067,7 @@ async function saveLineUserMapping(userId, employee, site) {
   try {
     const data = await apiRequest("/api/line/users/map", {
       method: "POST",
-      body: JSON.stringify({ userId, employee, site }),
+      body: JSON.stringify({ userId, employeeId, employeeName, site }),
     });
     if (!data?.ok) throw new Error("save failed");
     await fetchLineUsers();
@@ -1067,6 +1075,61 @@ async function saveLineUserMapping(userId, employee, site) {
   } catch (_e) {
     alert("保存に失敗しました");
   }
+}
+
+async function renameLineMappings(oldName, newName, employeeId) {
+  if (!API_ENABLED) return;
+  try {
+    await apiRequest("/api/line/users/rename", {
+      method: "POST",
+      body: JSON.stringify({ oldName, newName, employeeId }),
+    });
+    await fetchLineUsers();
+  } catch (_e) {}
+}
+
+async function syncShiftPlansToServer() {
+  if (!API_ENABLED) return;
+  try {
+    await apiRequest("/api/shift-plans/sync", {
+      method: "POST",
+      body: JSON.stringify({ plans: state.shiftPlans }),
+    });
+  } catch (_e) {}
+}
+
+async function sendShiftNow(targetDate = "") {
+  if (!API_ENABLED) {
+    alert("http/https環境で実行してください（file://は不可）");
+    return;
+  }
+  const status = document.getElementById("shiftDeliveryStatus");
+  if (status) status.textContent = "配信中...";
+  try {
+    const data = await apiRequest("/api/shift/deliver-daily", {
+      method: "POST",
+      body: JSON.stringify({ targetDate }),
+    });
+    if (status) {
+      status.textContent = `配信完了: 対象${data?.targetDate || "-"} / 送信${data?.sentCount || 0}件 / スキップ${data?.skippedCount || 0}件`;
+    }
+  } catch (_e) {
+    if (status) status.textContent = "配信失敗";
+  }
+}
+
+async function fetchShiftDeliveryStatus() {
+  if (!API_ENABLED) return;
+  try {
+    const data = await apiRequest("/api/shift/delivery-status");
+    if (!data?.ok) return;
+    const status = document.getElementById("shiftDeliveryStatus");
+    if (status) {
+      status.textContent = data.lastSentAt
+        ? `最終配信: ${new Date(data.lastSentAt).toLocaleString("ja-JP")} / 対象${data.lastTargetDate || "-"}`
+        : "まだ自動配信履歴はありません";
+    }
+  } catch (_e) {}
 }
 
 async function lineAction(action) {
@@ -1193,6 +1256,7 @@ function bindMasterEvents() {
       state.shiftPlans.push({ id: uid("s"), date, employee, start, end, route });
     }
     renderAll();
+    syncShiftPlansToServer();
   });
 
   document.getElementById("employeeMasterBody")?.addEventListener("click", (e) => {
@@ -1212,8 +1276,10 @@ function bindMasterEvents() {
       if (!row) return;
       const next = window.prompt("社員名を変更", row.name);
       if (!next) return;
+      const beforeName = row.name;
       row.name = next.trim();
       renderAll();
+      renameLineMappings(beforeName, row.name, row.id);
     }
   });
 
@@ -1277,15 +1343,17 @@ function bindMasterEvents() {
     if (!id) return;
     state.shiftPlans = state.shiftPlans.filter((s) => s.id !== id);
     renderAll();
+    syncShiftPlansToServer();
   });
 
   document.getElementById("lineMapForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const userId = document.getElementById("lineUserIdInput")?.value.trim();
-    const employee = document.getElementById("lineMapEmployee")?.value;
+    const employeeId = document.getElementById("lineMapEmployee")?.value;
     const site = document.getElementById("lineMapRoute")?.value;
-    if (!userId || !employee || !site) return;
-    await saveLineUserMapping(userId, employee, site);
+    const employee = state.employees.find((x) => x.id === employeeId);
+    if (!userId || !employeeId || !site || !employee) return;
+    await saveLineUserMapping(userId, employeeId, employee.name, site);
   });
 
   document.getElementById("lineUsersBody")?.addEventListener("click", (e) => {
@@ -1295,6 +1363,18 @@ function bindMasterEvents() {
     if (!userId) return;
     const input = document.getElementById("lineUserIdInput");
     if (input) input.value = userId;
+    const empSelect = document.getElementById("lineMapEmployee");
+    const siteSelect = document.getElementById("lineMapRoute");
+    const empId = target.getAttribute("data-fill-emp-id");
+    const site = target.getAttribute("data-fill-site");
+    if (empSelect && empId) empSelect.value = empId;
+    if (siteSelect && site) siteSelect.value = site;
+  });
+
+  document.getElementById("sendShiftNowBtn")?.addEventListener("click", () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    sendShiftNow(tomorrow.toISOString().slice(0, 10));
   });
 }
 
@@ -1380,8 +1460,11 @@ function init() {
   if (API_ENABLED) {
     pullSnapshot();
     fetchLineUsers();
+    fetchShiftDeliveryStatus();
+    syncShiftPlansToServer();
     setInterval(pullSnapshot, API_POLL_MS);
     setInterval(fetchLineUsers, API_POLL_MS * 2);
+    setInterval(fetchShiftDeliveryStatus, API_POLL_MS * 6);
   }
 }
 
