@@ -18,36 +18,25 @@
         <div class="brand">Liive勤怠</div>
         <p class="brand-sub">一般廃棄物向け 勤怠管理</p>
         <nav>
-          <button type="button" class="nav-link active" data-view="dashboard">ダッシュボード</button>
+          <button type="button" class="nav-link active" data-view="dashboard">社長ダッシュボード</button>
           <button type="button" class="nav-link" data-view="punch">打刻（LINE）</button>
           <button type="button" class="nav-link" data-view="records">勤怠履歴</button>
           <button type="button" class="nav-link" data-view="summary">月次集計</button>
+          <button type="button" class="nav-link" data-view="masters">管理設定（社員・ルート）</button>
         </nav>
       </aside>
 
       <main class="main">
         <header class="topbar">
-          <h1 id="pageTitle">勤怠ダッシュボード</h1>
+          <h1 id="pageTitle">社長ダッシュボード</h1>
         </header>
 
         <section class="view active" data-view="dashboard">
           <section class="kpi-grid">
-            <article class="kpi">
-              <p>本日打刻人数</p>
-              <h2 id="kpiTodayUsers">0名</h2>
-            </article>
-            <article class="kpi">
-              <p>勤務中人数</p>
-              <h2 id="kpiWorking">0名</h2>
-            </article>
-            <article class="kpi">
-              <p>今月総労働時間</p>
-              <h2 id="kpiMonthHours">0h</h2>
-            </article>
-            <article class="kpi">
-              <p>今月残業時間</p>
-              <h2 id="kpiOvertime">0h</h2>
-            </article>
+            <article class="kpi"><p>本日打刻人数</p><h2 id="kpiTodayUsers">0名</h2></article>
+            <article class="kpi"><p>勤務中人数</p><h2 id="kpiWorking">0名</h2></article>
+            <article class="kpi"><p>今月総労働時間</p><h2 id="kpiMonthHours">0h</h2></article>
+            <article class="kpi"><p>今月残業時間</p><h2 id="kpiOvertime">0h</h2></article>
           </section>
 
           <section class="grid-2">
@@ -59,19 +48,64 @@
                 <li><span>種別</span><strong id="latestAction">-</strong></li>
                 <li><span>時刻</span><strong id="latestTime">-</strong></li>
               </ul>
-              <p class="section-lead">LINEで打刻すると自動で反映されます。</p>
             </article>
             <article class="panel">
               <h2>勤務ステータス一覧</h2>
               <ul class="log-list" id="workingStatusList"></ul>
             </article>
           </section>
+
+          <section class="grid-2">
+            <article class="panel">
+              <div class="panel-head">
+                <h2>修正申請（承認待ち）</h2>
+                <strong id="pendingCount">0件</strong>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>日付</th>
+                      <th>社員</th>
+                      <th>修正内容</th>
+                      <th>理由</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="pendingApprovalBody"></tbody>
+                </table>
+              </div>
+            </article>
+            <article class="panel">
+              <h2>運用アラート</h2>
+              <ul class="log-list" id="alertList"></ul>
+            </article>
+          </section>
+
+          <section class="panel">
+            <h2>監査ログ（修正申請 承認/却下履歴）</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>日時</th>
+                    <th>社員</th>
+                    <th>対象日</th>
+                    <th>内容</th>
+                    <th>理由</th>
+                    <th>判定</th>
+                  </tr>
+                </thead>
+                <tbody id="auditTrailBody"></tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
         <section class="view" data-view="punch">
           <section class="panel">
             <h2>ワンタップ打刻（LINE連携）</h2>
-            <p class="section-lead">高齢の方でも押しやすいように、ボタンを大きくしています。</p>
+            <p class="section-lead">社員はスマホLINEのリッチメニューから打刻。PCは管理確認のみです。</p>
 
             <div class="punch-form">
               <label>社員
@@ -91,7 +125,7 @@
 
             <div class="sync-box">
               <p id="syncStatus" class="sync-status">待機中</p>
-              <p>この画面のボタンは、LINEの打刻内容と同じ処理を行います。</p>
+              <p>この画面は管理者のテスト用です。実運用はLINEでワンタップ打刻します。</p>
             </div>
           </section>
 
@@ -108,12 +142,12 @@
               <div class="filters">
                 <input id="timecardMonth" type="month" />
                 <input id="employeeSearch" type="search" placeholder="社員名で検索" />
-                <button type="button" class="btn btn-ghost" id="downloadTimecardCsvBtn">CSV出力</button>
+                <button type="button" class="btn btn-ghost" id="downloadTimecardCsvBtn">明細CSV</button>
                 <button type="button" class="btn btn-ghost" id="downloadPayrollCsvBtn">社員別勤怠CSV（給与用）</button>
                 <button type="button" class="btn btn-ghost" id="downloadSiteHoursCsvBtn">現場別工数CSV（請求確認用）</button>
               </div>
             </div>
-            <p class="section-lead">Liiveは給与/請求を直接計算せず、既存ツールへ渡すための正しい元データを作成します。</p>
+            <p class="section-lead">給与・請求は既存ツールで実施。Liiveは元データ整備に特化します。</p>
             <div class="table-wrap">
               <table>
                 <thead>
@@ -127,6 +161,7 @@
                     <th>休憩</th>
                     <th>残業</th>
                     <th>遅刻</th>
+                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody id="timecardTableBody"></tbody>
@@ -137,7 +172,17 @@
 
         <section class="view" data-view="summary">
           <section class="panel">
-            <h2>月次勤怠集計（タイムカード置換）</h2>
+            <div class="panel-head">
+              <h2>月次勤怠集計（タイムカード置換）</h2>
+              <div class="filters">
+                <select id="csvTemplate">
+                  <option value="standard_monthly">標準（社員月次）</option>
+                  <option value="freee_daily">freee連携向け（日次明細）</option>
+                </select>
+                <button type="button" class="btn" id="toggleMonthLockBtn">この月をロック</button>
+              </div>
+            </div>
+            <p class="section-lead" id="monthLockStatus">未ロック</p>
             <ul class="status-list">
               <li><span>対象社員</span><strong id="summaryMembers">0名</strong></li>
               <li><span>総労働時間</span><strong id="summaryHours">0h</strong></li>
@@ -160,6 +205,52 @@
                 <tbody id="summaryBody"></tbody>
               </table>
             </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="masters">
+          <section class="grid-2">
+            <article class="panel">
+              <h2>社員マスタ管理</h2>
+              <form id="employeeForm" class="master-form">
+                <input id="employeeCode" type="text" placeholder="社員コード 例:E001" required />
+                <input id="employeeName" type="text" placeholder="社員名" required />
+                <button type="submit" class="btn">社員を追加</button>
+              </form>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>コード</th>
+                      <th>社員名</th>
+                      <th>状態</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="employeeMasterBody"></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel">
+              <h2>ルート/現場マスタ管理</h2>
+              <form id="routeForm" class="master-form">
+                <input id="routeName" type="text" placeholder="ルート名 例: 本社回収ルートA" required />
+                <button type="submit" class="btn">ルートを追加</button>
+              </form>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ルート名</th>
+                      <th>状態</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="routeMasterBody"></tbody>
+                </table>
+              </div>
+            </article>
           </section>
         </section>
       </main>

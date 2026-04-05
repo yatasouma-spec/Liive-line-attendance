@@ -150,6 +150,17 @@ body {
   flex-wrap: wrap;
 }
 
+.master-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.master-form input {
+  min-width: 0;
+}
+
 input,
 select,
 textarea,
@@ -338,6 +349,10 @@ th {
   .grid-2,
   .punch-form,
   .big-button-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .master-form {
     grid-template-columns: 1fr;
   }
 
