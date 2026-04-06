@@ -449,6 +449,7 @@ button {
   grid-column: span 4;
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   justify-content: flex-end;
 }
 

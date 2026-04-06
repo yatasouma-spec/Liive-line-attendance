@@ -7,6 +7,8 @@ const MONTH_LOCK_KEY = "liiveAttendanceMonthLocksV2";
 const CORRECTION_MAP_KEY = "liiveAttendanceApprovedMapV2";
 const CSV_TEMPLATE_KEY = "liiveAttendanceCsvTemplateV2";
 const AUDIT_KEY = "liiveAttendanceAuditTrailV2";
+const LEAVE_REQUEST_KEY = "liiveAttendanceLeaveRequestsV1";
+const MONTH_UNLOCK_REQ_KEY = "liiveAttendanceMonthUnlockRequestsV1";
 const VEHICLES_KEY = "liiveAttendanceVehiclesV1";
 const DRIVER_ASSIGN_KEY = "liiveAttendanceDriverVehicleV1";
 const SHIFT_PLAN_KEY = "liiveAttendanceShiftPlansV1";
@@ -61,6 +63,8 @@ const state = {
   approvedCorrectionMap: loadJson(CORRECTION_MAP_KEY, {}),
   csvTemplate: loadJson(CSV_TEMPLATE_KEY, "standard_monthly"),
   auditTrail: loadJson(AUDIT_KEY, []),
+  leaveRequests: loadJson(LEAVE_REQUEST_KEY, []),
+  monthUnlockRequests: loadJson(MONTH_UNLOCK_REQ_KEY, []),
   employeeSearch: "",
   currentGps: null,
   lineUsers: [],
@@ -91,6 +95,8 @@ function persist() {
   localStorage.setItem(CORRECTION_MAP_KEY, JSON.stringify(state.approvedCorrectionMap));
   localStorage.setItem(CSV_TEMPLATE_KEY, JSON.stringify(state.csvTemplate));
   localStorage.setItem(AUDIT_KEY, JSON.stringify(state.auditTrail));
+  localStorage.setItem(LEAVE_REQUEST_KEY, JSON.stringify(state.leaveRequests));
+  localStorage.setItem(MONTH_UNLOCK_REQ_KEY, JSON.stringify(state.monthUnlockRequests));
   localStorage.setItem(THEME_KEY, JSON.stringify(state.theme));
 }
 
@@ -348,8 +354,104 @@ function buildClosingChecklist(month) {
     issues.push({ level: "warn", text: `45h超過見込みの社員が ${over45.length} 名います` });
   }
 
+  const unlockPending = state.monthUnlockRequests.filter((r) => r.month === month && r.status === "申請中");
+  if (unlockPending.length) {
+    issues.push({ level: "warn", text: `ロック解除申請が ${unlockPending.length} 件あります` });
+  }
+
   if (!issues.length) issues.push({ level: "ok", text: "締め処理の阻害要因はありません" });
   return issues;
+}
+
+function pendingCorrectionExists(source) {
+  return state.pendingCorrections.some((r) => r.sourceKey === source);
+}
+
+function generateAutoFillCandidates() {
+  const month = selectedMonth();
+  const today = new Date().toISOString().slice(0, 10);
+  const plans = state.shiftPlans.filter((s) => (s.date || "").startsWith(month));
+  let created = 0;
+
+  plans.forEach((plan) => {
+    if (plan.date > today) return;
+    const exists = state.timecards.some((r) => r.date === plan.date && r.employee === plan.employee);
+    if (exists) return;
+    const source = `missing|${plan.date}|${plan.employee}|${plan.route}`;
+    if (pendingCorrectionExists(source)) return;
+    state.pendingCorrections.push({
+      id: uid("p"),
+      sourceKey: source,
+      date: plan.date,
+      employee: plan.employee,
+      site: plan.route,
+      currentCheckIn: "-",
+      currentCheckOut: "-",
+      newCheckIn: plan.start,
+      newCheckOut: plan.end,
+      newBreakMin: 60,
+      reason: "打刻漏れ自動補完（シフト予定ベース）",
+      requestType: "auto_fill",
+    });
+    created += 1;
+  });
+
+  return created;
+}
+
+function requestMonthUnlock(month) {
+  if (!month) return false;
+  if (!isMonthLocked(month)) {
+    alert("この月はロックされていません。");
+    return false;
+  }
+  if (state.monthUnlockRequests.some((r) => r.month === month && r.status === "申請中")) {
+    alert("この月の解除申請はすでに提出済みです。");
+    return false;
+  }
+  const reason = window.prompt("ロック解除の理由を入力してください", "締め後の打刻漏れ修正のため");
+  if (!reason) return false;
+  state.monthUnlockRequests.push({
+    id: uid("u"),
+    month,
+    reason,
+    status: "申請中",
+    requestedAt: new Date().toLocaleString("ja-JP"),
+  });
+  return true;
+}
+
+function approveMonthUnlock(id) {
+  const req = state.monthUnlockRequests.find((r) => r.id === id);
+  if (!req || req.status !== "申請中") return;
+  state.monthLocks[req.month] = false;
+  req.status = "承認";
+  req.decidedAt = new Date().toLocaleString("ja-JP");
+  renderAll();
+}
+
+function rejectMonthUnlock(id) {
+  const req = state.monthUnlockRequests.find((r) => r.id === id);
+  if (!req || req.status !== "申請中") return;
+  req.status = "却下";
+  req.decidedAt = new Date().toLocaleString("ja-JP");
+  renderAll();
+}
+
+function approveLeaveRequest(id) {
+  const req = state.leaveRequests.find((r) => r.id === id);
+  if (!req || req.status !== "申請中") return;
+  req.status = "承認";
+  req.decidedAt = new Date().toLocaleString("ja-JP");
+  renderAll();
+}
+
+function rejectLeaveRequest(id) {
+  const req = state.leaveRequests.find((r) => r.id === id);
+  if (!req || req.status !== "申請中") return;
+  req.status = "却下";
+  req.decidedAt = new Date().toLocaleString("ja-JP");
+  renderAll();
 }
 
 function computeAlerts() {
@@ -394,7 +496,7 @@ function populateSelectors() {
   const routeOptions = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
   const vehicleOptions = activeVehicles().map((v) => `<option value="${v.id}">${v.plate} ${v.name}</option>`).join("");
 
-  ["lineEmployee", "shiftEmployee", "assignEmployee"].forEach((id) => {
+  ["lineEmployee", "shiftEmployee", "assignEmployee", "leaveEmployee"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
@@ -593,14 +695,67 @@ function renderPendingApprovals() {
       (row) => `<tr>
       <td>${row.date}</td>
       <td>${row.employee}</td>
-      <td>${row.currentCheckIn}→${row.newCheckIn} / ${row.currentCheckOut}→${row.newCheckOut}</td>
-      <td>${row.reason}</td>
+      <td>${row.currentCheckIn}→${row.newCheckIn} / ${row.currentCheckOut}→${row.newCheckOut}${row.site ? ` / ${row.site}` : ""}</td>
+      <td>${row.requestType === "auto_fill" ? "【自動補完】" : ""}${row.reason}</td>
       <td>
         <button class="btn" data-approve="${row.id}">承認</button>
         <button class="btn btn-ghost" data-reject="${row.id}">却下</button>
       </td>
     </tr>`
     )
+    .join("");
+}
+
+function renderMonthUnlockRequests() {
+  const body = document.getElementById("monthUnlockRequestBody");
+  if (!body) return;
+  const month = selectedMonth();
+  const rows = state.monthUnlockRequests
+    .filter((r) => r.month === month)
+    .sort((a, b) => String(b.requestedAt || "").localeCompare(String(a.requestedAt || "")));
+  if (!rows.length) {
+    body.innerHTML = '<tr><td class="empty" colspan="5">申請はありません</td></tr>';
+    return;
+  }
+  body.innerHTML = rows
+    .map((r) => `<tr>
+      <td>${r.month}</td>
+      <td>${r.reason || "-"}</td>
+      <td>${r.requestedAt || "-"}</td>
+      <td><span class="badge ${r.status === "承認" ? "ok" : r.status === "却下" ? "danger" : "warn"}">${r.status}</span></td>
+      <td>${
+        r.status === "申請中"
+          ? `<button class="btn" data-approve-unlock="${r.id}">承認</button>
+             <button class="btn btn-ghost" data-reject-unlock="${r.id}">却下</button>`
+          : "-"
+      }</td>
+    </tr>`)
+    .join("");
+}
+
+function renderLeaveRequests() {
+  const body = document.getElementById("leaveRequestBody");
+  if (!body) return;
+  const rows = [...state.leaveRequests].sort((a, b) => `${b.date}${b.requestedAt}`.localeCompare(`${a.date}${a.requestedAt}`));
+  if (!rows.length) {
+    body.innerHTML = '<tr><td class="empty" colspan="7">申請はありません</td></tr>';
+    return;
+  }
+  body.innerHTML = rows
+    .map((r) => `<tr>
+      <td>${r.date}</td>
+      <td>${r.employee}</td>
+      <td>${r.type}</td>
+      <td>${r.range || "全日"}</td>
+      <td>${r.reason || "-"}</td>
+      <td><span class="badge ${r.status === "承認" ? "ok" : r.status === "却下" ? "danger" : "warn"}">${r.status}</span></td>
+      <td>${
+        r.status === "申請中"
+          ? `<button class="btn" data-approve-leave="${r.id}">承認</button>
+             <button class="btn btn-ghost" data-reject-leave="${r.id}">却下</button>`
+          : "-"
+      }</td>
+    </tr>`)
     .join("");
 }
 
@@ -743,7 +898,12 @@ function renderSummary() {
     ? `${month} はロック中（修正不可）`
     : `${month} は未ロック（修正可能）`;
   const lockBtn = document.getElementById("toggleMonthLockBtn");
-  if (lockBtn) lockBtn.textContent = isMonthLocked(month) ? "この月のロック解除" : "この月をロック";
+  if (lockBtn) lockBtn.textContent = isMonthLocked(month) ? "ロック中（解除は申請）" : "この月をロック";
+  const unlockReqBtn = document.getElementById("requestMonthUnlockBtn");
+  if (unlockReqBtn) {
+    unlockReqBtn.disabled = !isMonthLocked(month);
+    unlockReqBtn.textContent = isMonthLocked(month) ? "この月のロック解除申請" : "この月はロックされていません";
+  }
 
   body.innerHTML = summary.length
     ? summary
@@ -902,6 +1062,8 @@ function renderAll() {
   renderTimecards();
   renderSummary();
   renderMasters();
+  renderMonthUnlockRequests();
+  renderLeaveRequests();
   persist();
 }
 
@@ -946,6 +1108,23 @@ function exportPayrollCsv() {
     return;
   }
 
+  if (state.csvTemplate === "jobcan_daily") {
+    const header = ["対象日", "社員コード", "社員名", "出勤時刻", "退勤時刻", "休憩分", "労働時間", "残業時間", "現場/ルート"];
+    const body = rows.map((r) => [
+      r.date,
+      getEmployeeCode(r.employee),
+      r.employee,
+      r.checkIn,
+      r.checkOut,
+      Number(r.breakMin || 0),
+      Number(r.hours || 0).toFixed(1),
+      Number(r.overtime || 0).toFixed(1),
+      r.site || "",
+    ]);
+    toCsv([header, ...body], `liive_payroll_jobcan_daily_${month}.csv`);
+    return;
+  }
+
   const map = new Map();
   rows.forEach((r) => {
     const key = r.employee || "未設定";
@@ -974,6 +1153,13 @@ function exportPayrollCsv() {
     const header = ["対象月", "社員コード", "社員名", "車両", "出勤日数", "労働時間", "残業時間", "遅刻回数"];
     const body = baseRows.map((r) => [r.month, r.code, r.employee, r.vehicle, r.days, r.hours, r.overtime, r.late]);
     toCsv([header, ...body], `liive_payroll_jobcan_${month}.csv`);
+    return;
+  }
+
+  if (state.csvTemplate === "freee_monthly") {
+    const header = ["month", "employee_code", "employee_name", "work_days", "work_hours", "break_hours", "overtime_hours", "late_count"];
+    const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.breakHours, r.overtime, r.late]);
+    toCsv([header, ...body], `liive_payroll_freee_monthly_${month}.csv`);
     return;
   }
 
@@ -1063,12 +1249,14 @@ function requestCorrection(source) {
     sourceKey: source,
     date: row.date,
     employee: row.employee,
+    site: row.site || "-",
     currentCheckIn: row.checkIn,
     currentCheckOut: row.checkOut,
     newCheckIn: newIn,
     newCheckOut: newOut,
     newBreakMin: Number(newBreak || 0),
     reason,
+    requestType: "manual",
   });
   renderAll();
 }
@@ -1082,16 +1270,13 @@ function approveCorrection(id) {
     return;
   }
 
-  const base = state.timecards.find((r) => (r.sourceKey || sourceKey(r)) === req.sourceKey);
-  if (!base) {
-    state.pendingCorrections = state.pendingCorrections.filter((p) => p.id !== id);
-    renderAll();
-    return;
-  }
-
   const recalc = recalcByTimes(req.date, req.newCheckIn, req.newCheckOut, Number(req.newBreakMin || 0));
+  const base = state.timecards.find((r) => (r.sourceKey || sourceKey(r)) === req.sourceKey);
   const corrected = {
-    ...base,
+    ...(base || {}),
+    date: req.date,
+    employee: req.employee,
+    site: req.site || base?.site || "-",
     checkIn: req.newCheckIn,
     checkOut: req.newCheckOut,
     breakMin: Number(req.newBreakMin || 0),
@@ -1102,9 +1287,14 @@ function approveCorrection(id) {
     correctionReason: req.reason,
     correctedAt: new Date().toISOString(),
   };
+  corrected.sourceKey = req.sourceKey || sourceKey(corrected);
 
-  state.approvedCorrectionMap[req.sourceKey] = corrected;
-  state.timecards = state.timecards.map((r) => ((r.sourceKey || sourceKey(r)) === req.sourceKey ? corrected : r));
+  state.approvedCorrectionMap[corrected.sourceKey] = corrected;
+  if (base) {
+    state.timecards = state.timecards.map((r) => ((r.sourceKey || sourceKey(r)) === req.sourceKey ? corrected : r));
+  } else {
+    state.timecards.push(corrected);
+  }
   state.auditTrail.push({
     at: new Date().toLocaleString("ja-JP"),
     employee: req.employee,
@@ -1500,6 +1690,29 @@ function bindMasterEvents() {
     syncShiftPlansToServer();
   });
 
+  document.getElementById("leaveRequestForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const date = document.getElementById("leaveDate")?.value;
+    const employee = document.getElementById("leaveEmployee")?.value;
+    const type = document.getElementById("leaveType")?.value;
+    const range = normalizeText(document.getElementById("leaveRange")?.value || "全日");
+    const reason = normalizeText(document.getElementById("leaveReason")?.value || "");
+    if (!date || !employee || !type) return;
+    state.leaveRequests.push({
+      id: uid("l"),
+      date,
+      employee,
+      type,
+      range: range || "全日",
+      reason,
+      status: "申請中",
+      requestedAt: new Date().toLocaleString("ja-JP"),
+    });
+    const leaveReason = document.getElementById("leaveReason");
+    if (leaveReason) leaveReason.value = "";
+    renderAll();
+  });
+
   document.getElementById("employeeMasterBody")?.addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
@@ -1718,6 +1931,30 @@ function bindMasterEvents() {
     if (siteSelect && site) siteSelect.value = site;
   });
 
+  document.getElementById("leaveRequestBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const approveId = target.getAttribute("data-approve-leave");
+    if (approveId) {
+      approveLeaveRequest(approveId);
+      return;
+    }
+    const rejectId = target.getAttribute("data-reject-leave");
+    if (rejectId) rejectLeaveRequest(rejectId);
+  });
+
+  document.getElementById("monthUnlockRequestBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const approveId = target.getAttribute("data-approve-unlock");
+    if (approveId) {
+      approveMonthUnlock(approveId);
+      return;
+    }
+    const rejectId = target.getAttribute("data-reject-unlock");
+    if (rejectId) rejectMonthUnlock(rejectId);
+  });
+
   document.getElementById("sendShiftNowBtn")?.addEventListener("click", () => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1742,6 +1979,8 @@ function bindEvents() {
 
   const shiftDate = document.getElementById("shiftDate");
   if (shiftDate) shiftDate.value = new Date().toISOString().slice(0, 10);
+  const leaveDate = document.getElementById("leaveDate");
+  if (leaveDate) leaveDate.value = new Date().toISOString().slice(0, 10);
 
   document.getElementById("employeeSearch")?.addEventListener("input", (e) => {
     state.employeeSearch = e.target.value || "";
@@ -1780,10 +2019,23 @@ function bindEvents() {
       if (!window.confirm(`${month} を締めロックしますか？（修正申請不可）`)) return;
       state.monthLocks[month] = true;
     } else {
-      if (!window.confirm(`${month} のロックを解除しますか？`)) return;
-      state.monthLocks[month] = false;
+      alert("ロック解除は「この月のロック解除申請」から申請し、承認してください。");
+      return;
     }
     renderAll();
+  });
+
+  document.getElementById("requestMonthUnlockBtn")?.addEventListener("click", () => {
+    const month = selectedMonth();
+    const ok = requestMonthUnlock(month);
+    if (!ok) return;
+    renderAll();
+  });
+
+  document.getElementById("generateAutoFillBtn")?.addEventListener("click", () => {
+    const created = generateAutoFillCandidates();
+    renderAll();
+    alert(created > 0 ? `打刻漏れ補完候補を ${created} 件作成しました。` : "追加できる補完候補はありませんでした。");
   });
 
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);

@@ -228,12 +228,16 @@
                 <label class="toolbar-field template">CSV形式<select id="csvTemplate">
                     <option value="standard_monthly">標準（社員月次）</option>
                     <option value="freee_daily">freee連携向け（日次明細）</option>
+                    <option value="freee_monthly">freee連携向け（月次集計）</option>
                     <option value="jobcan_payroll">ジョブカン取込向け</option>
+                    <option value="jobcan_daily">ジョブカン取込向け（日次明細）</option>
                     <option value="yayoi_payroll">弥生給与向け</option>
                   </select></label>
                 <div class="toolbar-actions">
                   <button type="button" class="btn" id="applySummaryFilterBtn">表示</button>
+                  <button type="button" class="btn btn-ghost" id="generateAutoFillBtn">打刻漏れ補完候補を作成</button>
                   <button type="button" class="btn" id="toggleMonthLockBtn">この月をロック</button>
+                  <button type="button" class="btn btn-ghost" id="requestMonthUnlockBtn">この月のロック解除申請</button>
                   <button type="button" class="btn btn-ghost" id="downloadAuditPackageBtn">監査提出レポート一括</button>
                 </div>
               </div>
@@ -242,6 +246,23 @@
             <div class="closing-box">
               <h3>締め処理チェック</h3>
               <ul id="closingChecklist" class="log-list"></ul>
+            </div>
+            <div class="closing-box">
+              <h3>ロック解除申請（承認制）</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>対象月</th>
+                      <th>申請理由</th>
+                      <th>申請日時</th>
+                      <th>状態</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="monthUnlockRequestBody"></tbody>
+                </table>
+              </div>
             </div>
             <section class="grid-2 summary-visuals">
               <article class="panel chart-panel compact-panel">
@@ -400,6 +421,37 @@
                   </tr>
                 </thead>
                 <tbody id="shiftPlanBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>有休 / 欠勤 申請（承認制）</h2>
+            <form id="leaveRequestForm" class="shift-form">
+              <input id="leaveDate" type="date" required />
+              <select id="leaveEmployee" required></select>
+              <select id="leaveType" required>
+                <option value="有休">有休</option>
+                <option value="欠勤">欠勤</option>
+              </select>
+              <input id="leaveRange" type="text" placeholder="全日 / 午前 / 午後" value="全日" />
+              <input id="leaveReason" type="text" placeholder="理由（任意）" />
+              <button type="submit" class="btn">申請を追加</button>
+            </form>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>対象日</th>
+                    <th>社員</th>
+                    <th>区分</th>
+                    <th>範囲</th>
+                    <th>理由</th>
+                    <th>状態</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="leaveRequestBody"></tbody>
               </table>
             </div>
           </section>
