@@ -1,0 +1,37 @@
+{
+  "source": {
+    "guide_pdf": "dashboard-guide.pdf",
+    "templates": [
+      "Red_1_0_0.zip",
+      "Orange_1_0_0.zip",
+      "Green_1_0_0.zip",
+      "Cyan_1_0_0.zip",
+      "LightBlue_1_0_0.zip",
+      "Blue_1_0_0.zip",
+      "SolidGray_1_0_0.zip"
+    ]
+  },
+  "design_principles": {
+    "page_background": "#FFFFFF",
+    "panel_background": "#F8F8FB",
+    "border": "#E6E6E6",
+    "text": "#000000",
+    "sub_text": "#626264",
+    "radius": 12,
+    "grid_line": "#E6E6E6"
+  },
+  "themes": {
+    "blue": {"primary":"#0017C1","primary_2":"#3460FB","primary_3":"#7096F8","soft":"#C5D7FB","surface":"#E8F1FE"},
+    "lightblue": {"primary":"#0055AD","primary_2":"#008BF2","primary_3":"#57B8FF","soft":"#C0E4FF","surface":"#F0F9FF"},
+    "cyan": {"primary":"#006F83","primary_2":"#00A3BF","primary_3":"#2BC8E4","soft":"#99F2FF","surface":"#E9F7F9"},
+    "green": {"primary":"#115A36","primary_2":"#259D63","primary_3":"#51B883","soft":"#9BD4B5","surface":"#E6F5EC"},
+    "orange": {"primary":"#AC3E00","primary_2":"#FB5B01","primary_3":"#FF8D44","soft":"#FFC199","surface":"#FFEEE2"},
+    "red": {"primary":"#CE0000","primary_2":"#FE3939","primary_3":"#FF7171","soft":"#FFBBBB","surface":"#FDEEEE"},
+    "solidgray": {"primary":"#4D4D4D","primary_2":"#767676","primary_3":"#999999","soft":"#CCCCCC","surface":"#F2F2F2"}
+  },
+  "status": {
+    "ok": "#259D63",
+    "warn": "#FB5B01",
+    "danger": "#CE0000"
+  }
+}

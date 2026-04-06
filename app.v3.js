@@ -12,6 +12,7 @@ const DRIVER_ASSIGN_KEY = "liiveAttendanceDriverVehicleV1";
 const SHIFT_PLAN_KEY = "liiveAttendanceShiftPlansV1";
 const GPS_EVENT_KEY = "liiveAttendanceGpsByEventV1";
 const OPEN_SESSION_KEY = "liiveAttendanceOpenSessionsV1";
+const THEME_KEY = "liiveAttendanceThemeV1";
 
 const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
@@ -64,6 +65,7 @@ const state = {
   currentGps: null,
   lineUsers: [],
   editingShiftId: "",
+  theme: loadJson(THEME_KEY, "blue"),
 };
 
 const viewTitle = {
@@ -89,6 +91,7 @@ function persist() {
   localStorage.setItem(CORRECTION_MAP_KEY, JSON.stringify(state.approvedCorrectionMap));
   localStorage.setItem(CSV_TEMPLATE_KEY, JSON.stringify(state.csvTemplate));
   localStorage.setItem(AUDIT_KEY, JSON.stringify(state.auditTrail));
+  localStorage.setItem(THEME_KEY, JSON.stringify(state.theme));
 }
 
 function uid(prefix) {
@@ -105,6 +108,16 @@ function switchView(nextView) {
   });
   const title = document.getElementById("pageTitle");
   if (title) title.textContent = viewTitle[nextView] || "Liive勤怠";
+}
+
+function applyTheme(themeName) {
+  const allow = ["blue", "lightblue", "cyan", "green", "orange", "red", "solidgray"];
+  const next = allow.includes(themeName) ? themeName : "blue";
+  state.theme = next;
+  document.body.setAttribute("data-theme", next);
+  const sel = document.getElementById("themeSelect");
+  if (sel && sel.value !== next) sel.value = next;
+  persist();
 }
 
 function selectedMonth() {
@@ -1585,6 +1598,10 @@ function bindEvents() {
     btn.addEventListener("click", () => switchView(btn.dataset.view))
   );
 
+  document.getElementById("themeSelect")?.addEventListener("change", (e) => {
+    applyTheme(e.target.value);
+  });
+
   const monthInput = document.getElementById("timecardMonth");
   if (monthInput) {
     monthInput.value = new Date().toISOString().slice(0, 7);
@@ -1657,6 +1674,7 @@ function bindEvents() {
 }
 
 function init() {
+  applyTheme(state.theme);
   bindEvents();
   renderAll();
   if (API_ENABLED) {
