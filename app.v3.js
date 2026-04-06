@@ -77,7 +77,11 @@ const viewTitle = {
   punch: "打刻（LINE）",
   records: "勤怠履歴",
   summary: "月次集計",
-  masters: "管理設定（社員/ルート/車両/シフト）",
+  masters: "社員/ルート設定",
+  vehicles: "車両設定",
+  shifts: "シフト管理",
+  leaves: "休暇申請管理",
+  lineusers: "LINEユーザー紐付け",
 };
 
 function persist() {

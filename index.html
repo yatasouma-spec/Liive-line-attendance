@@ -22,7 +22,11 @@
           <button type="button" class="nav-link" data-view="punch">打刻（LINE）</button>
           <button type="button" class="nav-link" data-view="records">勤怠履歴</button>
           <button type="button" class="nav-link" data-view="summary">月次集計</button>
-          <button type="button" class="nav-link" data-view="masters">管理設定（社員/ルート/車両/シフト）</button>
+          <button type="button" class="nav-link" data-view="masters">社員/ルート設定</button>
+          <button type="button" class="nav-link" data-view="vehicles">車両設定</button>
+          <button type="button" class="nav-link" data-view="shifts">シフト管理</button>
+          <button type="button" class="nav-link" data-view="leaves">休暇申請管理</button>
+          <button type="button" class="nav-link" data-view="lineusers">LINEユーザー紐付け</button>
         </nav>
       </aside>
 
@@ -351,6 +355,9 @@
               </div>
             </article>
           </section>
+        </section>
+
+        <section class="view" data-view="vehicles">
           <section class="grid-2">
             <article class="panel">
               <h2>車両マスタ管理</h2>
@@ -394,6 +401,9 @@
               </div>
             </article>
           </section>
+        </section>
+
+        <section class="view" data-view="shifts">
           <section class="panel">
             <h2>シフト計画管理（予定 vs 実績）</h2>
             <div class="filters">
@@ -424,7 +434,9 @@
               </table>
             </div>
           </section>
+        </section>
 
+        <section class="view" data-view="leaves">
           <section class="panel">
             <h2>有休 / 欠勤 申請（承認制）</h2>
             <form id="leaveRequestForm" class="shift-form">
@@ -455,7 +467,9 @@
               </table>
             </div>
           </section>
+        </section>
 
+        <section class="view" data-view="lineusers">
           <section class="panel">
             <h2>LINEユーザー紐付け（1分設定）</h2>
             <p class="section-lead">社員がLINEで1回送信すると、ここに候補表示されます。社員・ルートを選んで保存してください。</p>
