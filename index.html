@@ -51,6 +51,37 @@
             <article class="kpi"><p>今月残業時間</p><h2 id="kpiOvertime">0h</h2></article>
           </section>
 
+          <section class="grid-2 dashboard-visuals">
+            <article class="panel chart-panel">
+              <div class="panel-head">
+                <h2>勤務状況（円グラフ）</h2>
+                <span class="section-lead" id="workingRatioLabel">-</span>
+              </div>
+              <div class="donut-wrap">
+                <svg id="workingDonutChart" class="donut-chart" viewBox="0 0 200 200" aria-label="勤務状況チャート"></svg>
+                <ul class="chart-legend" id="workingDonutLegend"></ul>
+              </div>
+            </article>
+            <article class="panel chart-panel">
+              <div class="panel-head">
+                <h2>ルート別工数（円グラフ）</h2>
+                <span class="section-lead" id="routeRatioLabel">-</span>
+              </div>
+              <div class="donut-wrap">
+                <svg id="routeDonutChart" class="donut-chart" viewBox="0 0 200 200" aria-label="ルート別工数チャート"></svg>
+                <ul class="chart-legend" id="routeDonutLegend"></ul>
+              </div>
+            </article>
+          </section>
+
+          <section class="panel chart-panel">
+            <div class="panel-head">
+              <h2>月内推移（労働時間 / 残業時間）</h2>
+              <span class="section-lead">日別の実績推移</span>
+            </div>
+            <div class="bar-chart-wrap" id="monthlyTrendChart"></div>
+          </section>
+
           <section class="grid-2">
             <article class="panel">
               <h2>最新打刻</h2>
@@ -206,12 +237,29 @@
               <h3>締め処理チェック</h3>
               <ul id="closingChecklist" class="log-list"></ul>
             </div>
-            <ul class="status-list">
-              <li><span>対象社員</span><strong id="summaryMembers">0名</strong></li>
-              <li><span>総労働時間</span><strong id="summaryHours">0h</strong></li>
-              <li><span>総休憩時間</span><strong id="summaryBreak">0h</strong></li>
-              <li><span>総残業時間</span><strong id="summaryOvertime">0h</strong></li>
-            </ul>
+            <section class="grid-2 summary-visuals">
+              <article class="panel chart-panel compact-panel">
+                <div class="panel-head">
+                  <h2>社員ステータス（円グラフ）</h2>
+                  <span class="section-lead">正常 / 注意 / 要調整</span>
+                </div>
+                <div class="donut-wrap">
+                  <svg id="summaryStatusDonutChart" class="donut-chart" viewBox="0 0 200 200" aria-label="社員ステータス円グラフ"></svg>
+                  <ul class="chart-legend" id="summaryStatusDonutLegend"></ul>
+                </div>
+              </article>
+              <article class="panel chart-panel compact-panel">
+                <div class="panel-head">
+                  <h2>月次サマリー</h2>
+                </div>
+                <ul class="status-list">
+                  <li><span>対象社員</span><strong id="summaryMembers">0名</strong></li>
+                  <li><span>総労働時間</span><strong id="summaryHours">0h</strong></li>
+                  <li><span>総休憩時間</span><strong id="summaryBreak">0h</strong></li>
+                  <li><span>総残業時間</span><strong id="summaryOvertime">0h</strong></li>
+                </ul>
+              </article>
+            </section>
             <div class="table-wrap">
               <table>
                 <thead>

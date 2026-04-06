@@ -454,6 +454,127 @@ function renderDashboard() {
 
   renderPendingApprovals();
   renderAuditTrail();
+
+  const workingCount = Array.from(statusMap.values()).filter((x) => x.working).length;
+  const nonWorkingCount = Math.max(0, statusRows.length - workingCount);
+  const noPunchCount = Math.max(0, activeEmployees().length - statusRows.length);
+  renderDonutChart("workingDonutChart", "workingDonutLegend", [
+    { label: "勤務中", value: workingCount, color: "var(--ok)" },
+    { label: "非勤務", value: nonWorkingCount, color: "var(--warn)" },
+    { label: "未打刻", value: noPunchCount, color: "#b7b9bf" },
+  ], `${workingCount}名`);
+  const ratioLabel = document.getElementById("workingRatioLabel");
+  if (ratioLabel) {
+    const all = Math.max(1, activeEmployees().length);
+    ratioLabel.textContent = `稼働率 ${((workingCount / all) * 100).toFixed(1)}%`;
+  }
+
+  const routeHours = new Map();
+  monthRows.forEach((r) => {
+    const key = r.site || "未設定";
+    routeHours.set(key, (routeHours.get(key) || 0) + Number(r.hours || 0));
+  });
+  const routeSegments = Array.from(routeHours.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([label, value], idx) => ({
+      label,
+      value,
+      color: `var(--chart-${(idx % 5) + 1})`,
+    }));
+  renderDonutChart("routeDonutChart", "routeDonutLegend", routeSegments, `${routeSegments.length}件`);
+  const routeLabel = document.getElementById("routeRatioLabel");
+  if (routeLabel) routeLabel.textContent = routeSegments.length ? "上位5ルート表示" : "データなし";
+
+  renderMonthlyTrend(monthRows);
+}
+
+function toCssColor(raw) {
+  if (!raw) return "#888";
+  if (raw.startsWith("var(")) {
+    const key = raw.replace("var(", "").replace(")", "").trim();
+    return getComputedStyle(document.body).getPropertyValue(key).trim() || "#888";
+  }
+  return raw;
+}
+
+function renderDonutChart(svgId, legendId, segments, centerText = "") {
+  const svg = document.getElementById(svgId);
+  const legend = document.getElementById(legendId);
+  if (!svg) return;
+
+  const safe = (segments || []).filter((s) => Number(s.value || 0) > 0);
+  const total = safe.reduce((sum, s) => sum + Number(s.value || 0), 0);
+  if (!total) {
+    svg.innerHTML = `<circle cx=\"100\" cy=\"100\" r=\"68\" fill=\"none\" stroke=\"#e6e6e6\" stroke-width=\"24\"></circle>
+      <circle cx=\"100\" cy=\"100\" r=\"48\" fill=\"#fff\"></circle>
+      <text x=\"100\" y=\"106\" text-anchor=\"middle\" class=\"donut-center-text\">No Data</text>`;
+    if (legend) legend.innerHTML = "<li>データなし</li>";
+    return;
+  }
+
+  const r = 68;
+  const c = 2 * Math.PI * r;
+  let offset = 0;
+  const arcs = safe
+    .map((s) => {
+      const v = Number(s.value || 0);
+      const len = (v / total) * c;
+      const color = toCssColor(s.color);
+      const node = `<circle cx=\"100\" cy=\"100\" r=\"${r}\" fill=\"none\" stroke=\"${color}\" stroke-width=\"24\" stroke-linecap=\"butt\" stroke-dasharray=\"${len.toFixed(3)} ${(c - len).toFixed(3)}\" stroke-dashoffset=\"${(-offset).toFixed(3)}\" transform=\"rotate(-90 100 100)\"></circle>`;
+      offset += len;
+      return node;
+    })
+    .join("");
+
+  svg.innerHTML = `<circle cx=\"100\" cy=\"100\" r=\"${r}\" fill=\"none\" stroke=\"#f1f1f4\" stroke-width=\"24\"></circle>${arcs}
+    <circle cx=\"100\" cy=\"100\" r=\"48\" fill=\"#fff\"></circle>
+    <text x=\"100\" y=\"96\" text-anchor=\"middle\" class=\"donut-center-text\">${centerText || ""}</text>
+    <text x=\"100\" y=\"116\" text-anchor=\"middle\" class=\"donut-sub-text\">合計 ${total}</text>`;
+
+  if (legend) {
+    legend.innerHTML = safe
+      .map((s) => {
+        const v = Number(s.value || 0);
+        const p = ((v / total) * 100).toFixed(1);
+        const color = toCssColor(s.color);
+        return `<li><span class=\"legend-dot\" style=\"background:${color}\"></span><span>${s.label}</span><strong>${v} (${p}%)</strong></li>`;
+      })
+      .join("");
+  }
+}
+
+function renderMonthlyTrend(monthRows) {
+  const mount = document.getElementById("monthlyTrendChart");
+  if (!mount) return;
+  if (!monthRows.length) {
+    mount.innerHTML = "<p class='section-lead'>この月のデータがありません</p>";
+    return;
+  }
+
+  const byDay = new Map();
+  monthRows.forEach((r) => {
+    const day = (r.date || "").slice(-2);
+    const slot = byDay.get(day) || { day, h: 0, ot: 0 };
+    slot.h += Number(r.hours || 0);
+    slot.ot += Number(r.overtime || 0);
+    byDay.set(day, slot);
+  });
+  const rows = Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day)).slice(-12);
+  const max = Math.max(1, ...rows.map((x) => x.h));
+  mount.innerHTML = `<div class=\"bar-chart\">${rows
+    .map((x) => {
+      const hPct = Math.max(4, (x.h / max) * 100);
+      const otPct = Math.max(2, (x.ot / max) * 100);
+      return `<div class=\"bar-group\">
+        <div class=\"bar-stack\">
+          <div class=\"bar-hours\" style=\"height:${hPct}%\" title=\"労働 ${x.h.toFixed(1)}h\"></div>
+          <div class=\"bar-ot\" style=\"height:${otPct}%\" title=\"残業 ${x.ot.toFixed(1)}h\"></div>
+        </div>
+        <span class=\"bar-label\">${x.day}</span>
+      </div>`;
+    })
+    .join("")}</div>`;
 }
 
 function renderPendingApprovals() {
@@ -601,6 +722,17 @@ function renderSummary() {
         ? `予定未登録 ${x.noShift}件`
         : `遅延+${x.shiftLateMin}分 / ルート差異${x.shiftMismatch}件`,
   }));
+
+  const statusStats = { ok: 0, warn: 0, danger: 0 };
+  summary.forEach((r) => {
+    const cls = r.overtime > 20 || r.late >= 3 ? "danger" : r.overtime > 10 || r.late >= 1 ? "warn" : "ok";
+    statusStats[cls] += 1;
+  });
+  renderDonutChart("summaryStatusDonutChart", "summaryStatusDonutLegend", [
+    { label: "正常", value: statusStats.ok, color: "var(--ok)" },
+    { label: "注意", value: statusStats.warn, color: "var(--warn)" },
+    { label: "要調整", value: statusStats.danger, color: "var(--danger)" },
+  ], `${summary.length}名`);
 
   document.getElementById("summaryMembers").textContent = `${summary.length}名`;
   document.getElementById("summaryHours").textContent = `${summary.reduce((s, r) => s + r.hours, 0).toFixed(1)}h`;
