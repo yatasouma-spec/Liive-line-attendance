@@ -186,12 +186,15 @@
           <section class="panel">
             <div class="panel-head">
               <h2>勤怠履歴一覧</h2>
-              <div class="filters">
-                <input id="timecardMonth" type="month" />
-                <input id="employeeSearch" type="search" placeholder="社員名で検索" />
-                <button type="button" class="btn btn-ghost" id="downloadTimecardCsvBtn">明細CSV</button>
-                <button type="button" class="btn btn-ghost" id="downloadPayrollCsvBtn">社員別勤怠CSV（給与用）</button>
-                <button type="button" class="btn btn-ghost" id="downloadSiteHoursCsvBtn">現場別工数CSV（請求確認用）</button>
+              <div class="filters filter-toolbar">
+                <label class="toolbar-field month">対象月<input id="timecardMonth" type="month" /></label>
+                <label class="toolbar-field search">社員検索<input id="employeeSearch" type="search" placeholder="社員名で検索" /></label>
+                <div class="toolbar-actions">
+                  <button type="button" class="btn" id="applyRecordFilterBtn">表示</button>
+                  <button type="button" class="btn btn-ghost" id="downloadTimecardCsvBtn">明細CSV</button>
+                  <button type="button" class="btn btn-ghost" id="downloadPayrollCsvBtn">社員別勤怠CSV（給与用）</button>
+                  <button type="button" class="btn btn-ghost" id="downloadSiteHoursCsvBtn">現場別工数CSV（請求確認用）</button>
+                </div>
               </div>
             </div>
             <p class="section-lead">給与・請求は既存ツールで実施。Liiveは元データ整備に特化します。</p>
@@ -221,15 +224,18 @@
           <section class="panel">
             <div class="panel-head">
               <h2>月次勤怠集計（タイムカード置換）</h2>
-              <div class="filters">
-                <select id="csvTemplate">
-                  <option value="standard_monthly">標準（社員月次）</option>
-                  <option value="freee_daily">freee連携向け（日次明細）</option>
-                  <option value="jobcan_payroll">ジョブカン取込向け</option>
-                  <option value="yayoi_payroll">弥生給与向け</option>
-                </select>
-                <button type="button" class="btn" id="toggleMonthLockBtn">この月をロック</button>
-                <button type="button" class="btn btn-ghost" id="downloadAuditPackageBtn">監査提出レポート一括</button>
+              <div class="filters filter-toolbar">
+                <label class="toolbar-field template">CSV形式<select id="csvTemplate">
+                    <option value="standard_monthly">標準（社員月次）</option>
+                    <option value="freee_daily">freee連携向け（日次明細）</option>
+                    <option value="jobcan_payroll">ジョブカン取込向け</option>
+                    <option value="yayoi_payroll">弥生給与向け</option>
+                  </select></label>
+                <div class="toolbar-actions">
+                  <button type="button" class="btn" id="applySummaryFilterBtn">表示</button>
+                  <button type="button" class="btn" id="toggleMonthLockBtn">この月をロック</button>
+                  <button type="button" class="btn btn-ghost" id="downloadAuditPackageBtn">監査提出レポート一括</button>
+                </div>
               </div>
             </div>
             <p class="section-lead" id="monthLockStatus">未ロック</p>

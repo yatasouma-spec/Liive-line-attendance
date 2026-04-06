@@ -1745,7 +1745,16 @@ function bindEvents() {
 
   document.getElementById("employeeSearch")?.addEventListener("input", (e) => {
     state.employeeSearch = e.target.value || "";
+  });
+
+  document.getElementById("applyRecordFilterBtn")?.addEventListener("click", () => {
+    renderDashboard();
     renderTimecards();
+    renderSummary();
+  });
+
+  document.getElementById("applySummaryFilterBtn")?.addEventListener("click", () => {
+    renderDashboard();
     renderSummary();
   });
 
@@ -1757,6 +1766,7 @@ function bindEvents() {
   document.getElementById("csvTemplate")?.addEventListener("change", (e) => {
     state.csvTemplate = e.target.value;
     persist();
+    renderSummary();
   });
 
   document.getElementById("toggleMonthLockBtn")?.addEventListener("click", () => {

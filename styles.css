@@ -412,6 +412,46 @@ button {
   flex-wrap: wrap;
 }
 
+.filter-toolbar {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.toolbar-field {
+  display: grid;
+  gap: 4px;
+  color: var(--sub);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.toolbar-field input,
+.toolbar-field select {
+  min-height: 40px;
+}
+
+.toolbar-field.month {
+  grid-column: span 3;
+}
+
+.toolbar-field.search {
+  grid-column: span 5;
+}
+
+.toolbar-field.template {
+  grid-column: span 4;
+}
+
+.toolbar-actions {
+  grid-column: span 4;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .master-form,
 .shift-form,
 .punch-form {
@@ -582,6 +622,7 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
+  max-height: 56vh;
 }
 
 table {
@@ -603,6 +644,17 @@ th {
   color: var(--sub);
   background: #f1f1f4;
   font-weight: 800;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+tbody tr:nth-child(even) td {
+  background: #fbfcff;
+}
+
+tbody tr:hover td {
+  background: color-mix(in srgb, var(--primary-soft) 25%, #fff 75%);
 }
 
 .badge {
@@ -658,6 +710,21 @@ th {
   .master-form,
   .shift-form {
     grid-template-columns: 1fr;
+  }
+
+  .filter-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-field.month,
+  .toolbar-field.search,
+  .toolbar-field.template,
+  .toolbar-actions {
+    grid-column: span 1;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-start;
   }
 
   .donut-wrap {
