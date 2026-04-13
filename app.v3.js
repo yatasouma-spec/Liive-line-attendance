@@ -78,7 +78,6 @@ const viewTitle = {
   records: "勤怠履歴",
   summary: "月次集計",
   masters: "社員/ルート設定",
-  vehicles: "車両設定",
   shifts: "シフト管理",
   leaves: "休暇申請管理",
   lineusers: "LINEユーザー紐付け",
@@ -156,17 +155,63 @@ function getVehicleById(id) {
 }
 
 function getVehicleNameByEmployee(employeeName) {
-  const employee = state.employees.find((e) => e.name === employeeName);
-  if (!employee) return "-";
-  const vehicleId = state.driverAssignments[employee.id];
-  if (!vehicleId) return "-";
-  const vehicle = getVehicleById(vehicleId);
-  return vehicle ? `${vehicle.plate} ${vehicle.name}` : "-";
+  return "-";
 }
 
 function normalizeText(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
+}
+
+function parseGoogleMapsLatLng(urlText) {
+  const text = normalizeText(urlText);
+  if (!text) return null;
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(text);
+    } catch (_e) {
+      return text;
+    }
+  })();
+  const patterns = [
+    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /[?&]center=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+  ];
+  for (const p of patterns) {
+    const m = decoded.match(p);
+    if (!m) continue;
+    const lat = Number(m[1]);
+    const lng = Number(m[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  return null;
+}
+
+function setGeoInputs(prefix, lat, lng) {
+  const latInput = document.getElementById(`${prefix}GeoLat`);
+  const lngInput = document.getElementById(`${prefix}GeoLng`);
+  if (latInput) latInput.value = Number(lat).toFixed(6);
+  if (lngInput) lngInput.value = Number(lng).toFixed(6);
+}
+
+function fillGeoFromMapUrl(prefix) {
+  const mapUrl = document.getElementById(`${prefix}GeoMapUrl`)?.value || "";
+  const parsed = parseGoogleMapsLatLng(mapUrl);
+  if (!parsed) {
+    alert("GoogleマップURLから位置を取得できませんでした。URLを確認してください。");
+    return;
+  }
+  setGeoInputs(prefix, parsed.lat, parsed.lng);
+}
+
+function fillGeoFromCurrentGps(prefix) {
+  if (!state.currentGps) {
+    alert("先に「現在地を取得（GPS）」を実行してください。");
+    return;
+  }
+  setGeoInputs(prefix, state.currentGps.lat, state.currentGps.lng);
 }
 
 function reconcileLineDisplayNames() {
@@ -218,6 +263,33 @@ function renameRouteReferences(oldRoute, newRoute) {
   Object.values(state.openSessions || {}).forEach((row) => {
     if (row && row.site === oldRoute) row.site = newRoute;
   });
+}
+
+function isPayrollEligibleByWindow(minutes) {
+  return Number(minutes) >= 8 * 60 + 50 && Number(minutes) <= 9 * 60 + 10;
+}
+
+function isPayrollEligibleRow(row) {
+  if (typeof row.payrollEligible === "boolean") return row.payrollEligible;
+  const m = minutesFromHHMM(row.checkIn || "");
+  if (m === null) return false;
+  return isPayrollEligibleByWindow(m);
+}
+
+function formatRouteGeo(route) {
+  const lat = Number(route?.geoLat);
+  const lng = Number(route?.geoLng);
+  const radius = Number(route?.geoRadiusM || 300);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / ${radius}m`;
+}
+
+function formatGeoCell(row) {
+  const lat = Number(row?.geoLat);
+  const lng = Number(row?.geoLng);
+  const radius = Number(row?.geoRadiusM || 300);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / ${radius}m`;
 }
 
 function sourceKey(row) {
@@ -510,9 +582,8 @@ function populateSelectors() {
   const employeeOptions = activeEmployees().map((e) => `<option value="${e.name}">${e.name}</option>`).join("");
   const employeeIdOptions = activeEmployees().map((e) => `<option value="${e.id}">${e.name}</option>`).join("");
   const routeOptions = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
-  const vehicleOptions = activeVehicles().map((v) => `<option value="${v.id}">${v.plate} ${v.name}</option>`).join("");
 
-  ["lineEmployee", "shiftEmployee", "assignEmployee", "leaveEmployee"].forEach((id) => {
+  ["lineEmployee", "shiftEmployee", "leaveEmployee"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
@@ -534,13 +605,6 @@ function populateSelectors() {
     el.innerHTML = routeOptions;
     if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
   });
-
-  const assignVehicle = document.getElementById("assignVehicle");
-  if (assignVehicle) {
-    const prev = assignVehicle.value;
-    assignVehicle.innerHTML = vehicleOptions;
-    if (prev && [...assignVehicle.options].some((o) => o.value === prev)) assignVehicle.value = prev;
-  }
 }
 
 function renderDashboard() {
@@ -714,8 +778,12 @@ function renderPendingApprovals() {
       <td>${row.currentCheckIn}→${row.newCheckIn} / ${row.currentCheckOut}→${row.newCheckOut}${row.site ? ` / ${row.site}` : ""}</td>
       <td>${row.requestType === "auto_fill" ? "【自動補完】" : ""}${row.reason}</td>
       <td>
-        <button class="btn" data-approve="${row.id}">承認</button>
-        <button class="btn btn-ghost" data-reject="${row.id}">却下</button>
+        ${
+          row.requestType === "line_request"
+            ? `<button class="btn btn-ghost" data-reject="${row.id}">確認済みにする</button>`
+            : `<button class="btn" data-approve="${row.id}">承認</button>
+               <button class="btn btn-ghost" data-reject="${row.id}">却下</button>`
+        }
       </td>
     </tr>`
     )
@@ -817,8 +885,7 @@ function renderPunchLogs() {
         .map((r) => {
           const geo = state.gpsByEvent[eventKey(r)];
           const gpsTxt = geo ? ` / GPS ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}` : "";
-          const vehicleTxt = ` / 車両 ${getVehicleNameByEmployee(r.employee)}`;
-          return `<li><strong>${r.employee} / ${r.action}</strong><p>${r.date} ${r.time} / ${r.site}${vehicleTxt}${gpsTxt}</p></li>`;
+          return `<li><strong>${r.employee} / ${r.action}</strong><p>${r.date} ${r.time} / ${r.site}${gpsTxt}</p></li>`;
         })
         .join("")
     : "<li><p>打刻履歴がありません</p></li>";
@@ -959,8 +1026,6 @@ function renderSummary() {
 function renderMasters() {
   const empBody = document.getElementById("employeeMasterBody");
   const routeBody = document.getElementById("routeMasterBody");
-  const vehicleBody = document.getElementById("vehicleMasterBody");
-  const assignBody = document.getElementById("driverVehicleBody");
   const shiftBody = document.getElementById("shiftPlanBody");
   const lineUsersBody = document.getElementById("lineUsersBody");
 
@@ -986,6 +1051,7 @@ function renderMasters() {
       .map(
         (r) => `<tr>
       <td>${r.name}</td>
+      <td>${formatRouteGeo(r)}</td>
       <td><span class="badge ${r.active ? "ok" : "warn"}">${r.active ? "有効" : "無効"}</span></td>
       <td>
         <button class="btn btn-ghost" data-edit-route="${r.id}">編集</button>
@@ -995,38 +1061,6 @@ function renderMasters() {
     </tr>`
       )
       .join("");
-  }
-
-  if (vehicleBody) {
-    vehicleBody.innerHTML = state.vehicles
-      .map(
-        (v) => `<tr>
-      <td>${v.plate}</td>
-      <td>${v.name}</td>
-      <td><span class="badge ${v.active ? "ok" : "warn"}">${v.active ? "有効" : "無効"}</span></td>
-      <td>
-        <button class="btn btn-ghost" data-edit-vehicle="${v.id}">編集</button>
-        <button class="btn btn-ghost" data-toggle-vehicle="${v.id}">${v.active ? "無効化" : "有効化"}</button>
-        <button class="btn btn-ghost" data-delete-vehicle="${v.id}">削除</button>
-      </td>
-    </tr>`
-      )
-      .join("");
-  }
-
-  if (assignBody) {
-    const rows = state.employees
-      .filter((e) => e.active)
-      .map((e) => {
-        const vid = state.driverAssignments[e.id];
-        const v = vid ? getVehicleById(vid) : null;
-        return `<tr>
-        <td>${e.name}</td>
-        <td>${v ? `${v.plate} ${v.name}` : "未設定"}</td>
-        <td><button class="btn btn-ghost" data-clear-assign="${e.id}">解除</button></td>
-      </tr>`;
-      });
-    assignBody.innerHTML = rows.join("") || '<tr><td class="empty" colspan="3">社員がいません</td></tr>';
   }
 
   if (shiftBody) {
@@ -1059,14 +1093,15 @@ function renderMasters() {
       <td>${u.lastText || "-"}</td>
       <td>${u.employee || "-"}</td>
       <td>${u.site || "-"}</td>
+      <td>${formatGeoCell(u)}</td>
       <td>
-        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}">このIDを入力</button>
+        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}" data-fill-geo-lat="${u.geoLat ?? ""}" data-fill-geo-lng="${u.geoLng ?? ""}" data-fill-geo-radius="${u.geoRadiusM ?? ""}">このIDを入力</button>
         <button class="btn btn-ghost" data-unmap-line-user="${u.userId}">紐付け解除</button>
       </td>
     </tr>`
           )
           .join("")
-      : '<tr><td class="empty" colspan="6">まだLINE送信履歴がありません</td></tr>';
+      : '<tr><td class="empty" colspan="7">まだLINE送信履歴がありません</td></tr>';
   }
 }
 
@@ -1086,12 +1121,11 @@ function renderAll() {
 function exportDetailCsv() {
   const month = selectedMonth();
   const rows = filteredTimecards();
-  const header = ["日付", "社員", "社員コード", "車両", "現場/ルート", "出勤", "退勤", "労働時間", "休憩分", "残業", "遅刻"];
+  const header = ["日付", "社員", "社員コード", "現場/ルート", "出勤", "退勤", "労働時間", "休憩分", "残業", "遅刻", "給与反映"];
   const body = rows.map((r) => [
     r.date,
     r.employee,
     getEmployeeCode(r.employee),
-    getVehicleNameByEmployee(r.employee),
     r.site,
     r.checkIn,
     r.checkOut,
@@ -1099,16 +1133,17 @@ function exportDetailCsv() {
     Number(r.breakMin || 0),
     Number(r.overtime || 0).toFixed(1),
     r.isLate ? 1 : 0,
+    isPayrollEligibleRow(r) ? "対象" : "除外",
   ]);
   toCsv([header, ...body], `liive_attendance_detail_${month}.csv`);
 }
 
 function exportPayrollCsv() {
   const month = selectedMonth();
-  const rows = filteredTimecards();
+  const rows = filteredTimecards().filter((r) => isPayrollEligibleRow(r));
 
   if (state.csvTemplate === "freee_daily") {
-    const header = ["date", "employee_code", "employee_name", "clock_in", "clock_out", "break_minutes", "work_hours", "overtime_hours", "vehicle"];
+    const header = ["date", "employee_code", "employee_name", "clock_in", "clock_out", "break_minutes", "work_hours", "overtime_hours"];
     const body = rows.map((r) => [
       r.date,
       getEmployeeCode(r.employee),
@@ -1118,7 +1153,6 @@ function exportPayrollCsv() {
       Number(r.breakMin || 0),
       Number(r.hours || 0).toFixed(1),
       Number(r.overtime || 0).toFixed(1),
-      getVehicleNameByEmployee(r.employee),
     ]);
     toCsv([header, ...body], `liive_payroll_freee_${month}.csv`);
     return;
@@ -1157,7 +1191,6 @@ function exportPayrollCsv() {
     month,
     code: getEmployeeCode(x.employee),
     employee: x.employee,
-    vehicle: getVehicleNameByEmployee(x.employee),
     days: x.days.size,
     hours: x.hours.toFixed(1),
     breakHours: (x.breakMin / 60).toFixed(1),
@@ -1166,8 +1199,8 @@ function exportPayrollCsv() {
   }));
 
   if (state.csvTemplate === "jobcan_payroll") {
-    const header = ["対象月", "社員コード", "社員名", "車両", "出勤日数", "労働時間", "残業時間", "遅刻回数"];
-    const body = baseRows.map((r) => [r.month, r.code, r.employee, r.vehicle, r.days, r.hours, r.overtime, r.late]);
+    const header = ["対象月", "社員コード", "社員名", "出勤日数", "労働時間", "残業時間", "遅刻回数"];
+    const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.overtime, r.late]);
     toCsv([header, ...body], `liive_payroll_jobcan_${month}.csv`);
     return;
   }
@@ -1180,14 +1213,14 @@ function exportPayrollCsv() {
   }
 
   if (state.csvTemplate === "yayoi_payroll") {
-    const header = ["対象月", "社員コード", "社員名", "出勤日数", "総労働時間(h)", "総休憩時間(h)", "残業時間(h)", "遅刻回数", "車両"];
-    const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.breakHours, r.overtime, r.late, r.vehicle]);
+    const header = ["対象月", "社員コード", "社員名", "出勤日数", "総労働時間(h)", "総休憩時間(h)", "残業時間(h)", "遅刻回数"];
+    const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.breakHours, r.overtime, r.late]);
     toCsv([header, ...body], `liive_payroll_yayoi_${month}.csv`);
     return;
   }
 
-  const header = ["対象月", "社員コード", "社員名", "出勤日数", "総労働時間(h)", "総休憩時間(h)", "残業時間(h)", "遅刻回数", "車両"];
-  const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.breakHours, r.overtime, r.late, r.vehicle]);
+  const header = ["対象月", "社員コード", "社員名", "出勤日数", "総労働時間(h)", "総休憩時間(h)", "残業時間(h)", "遅刻回数"];
+  const body = baseRows.map((r) => [r.month, r.code, r.employee, r.days, r.hours, r.breakHours, r.overtime, r.late]);
   toCsv([header, ...body], `liive_payroll_${month}.csv`);
 }
 
@@ -1197,17 +1230,15 @@ function exportSiteHoursCsv() {
   const map = new Map();
   rows.forEach((r) => {
     const key = r.site || "未設定";
-    const slot = map.get(key) || { site: key, workers: new Set(), days: new Set(), hours: 0, overtime: 0, vehicles: new Set() };
+    const slot = map.get(key) || { site: key, workers: new Set(), days: new Set(), hours: 0, overtime: 0 };
     slot.workers.add(r.employee || "未設定");
     slot.days.add(r.date);
     slot.hours += Number(r.hours || 0);
     slot.overtime += Number(r.overtime || 0);
-    const v = getVehicleNameByEmployee(r.employee);
-    if (v && v !== "-") slot.vehicles.add(v);
     map.set(key, slot);
   });
-  const header = ["対象月", "現場/ルート", "稼働人数", "稼働日数", "総工数(h)", "残業工数(h)", "主車両"];
-  const body = Array.from(map.values()).map((x) => [month, x.site, x.workers.size, x.days.size, x.hours.toFixed(1), x.overtime.toFixed(1), Array.from(x.vehicles).join(" / ")]);
+  const header = ["対象月", "現場/ルート", "稼働人数", "稼働日数", "総工数(h)", "残業工数(h)"];
+  const body = Array.from(map.values()).map((x) => [month, x.site, x.workers.size, x.days.size, x.hours.toFixed(1), x.overtime.toFixed(1)]);
   toCsv([header, ...body], `liive_site_hours_${month}.csv`);
 }
 
@@ -1239,6 +1270,7 @@ function recalcByTimes(date, checkIn, checkOut, breakMin) {
     hours,
     overtime: Number(Math.max(0, hours - 8).toFixed(1)),
     isLate: start.getHours() * 60 + start.getMinutes() > 9 * 60,
+    payrollEligible: isPayrollEligibleByWindow(start.getHours() * 60 + start.getMinutes()),
   };
 }
 
@@ -1277,6 +1309,50 @@ function requestCorrection(source) {
   renderAll();
 }
 
+function requestCorrectionByEmployee() {
+  const employee = document.getElementById("lineEmployee")?.value;
+  if (!employee) return;
+  const latest = [...state.timecards].reverse().find((r) => r.employee === employee);
+  if (latest) {
+    requestCorrection(latest.sourceKey || sourceKey(latest));
+    return;
+  }
+  const reason = window.prompt("修正理由", "打刻を押し間違えたため");
+  if (!reason) return;
+  state.pendingCorrections.push({
+    id: uid("p"),
+    sourceKey: "",
+    date: new Date().toISOString().slice(0, 10),
+    employee,
+    site: document.getElementById("lineSite")?.value || "-",
+    currentCheckIn: "-",
+    currentCheckOut: "-",
+    newCheckIn: "-",
+    newCheckOut: "-",
+    newBreakMin: 0,
+    reason,
+    requestType: "manual",
+  });
+  renderAll();
+}
+
+function parseShiftCsv(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(1)
+    .map((line) => line.split(",").map((v) => v.replace(/^"|"$/g, "").trim()))
+    .map((cols) => ({
+      date: cols[0] || "",
+      employee: cols[1] || "",
+      start: cols[2] || "",
+      end: cols[3] || "",
+      route: cols[4] || "",
+    }))
+    .filter((row) => row.date && row.employee && row.start && row.end && row.route);
+}
+
 function approveCorrection(id) {
   const req = state.pendingCorrections.find((p) => p.id === id);
   if (!req) return;
@@ -1299,6 +1375,8 @@ function approveCorrection(id) {
     hours: recalc.hours,
     overtime: recalc.overtime,
     isLate: recalc.isLate,
+    payrollEligible: recalc.payrollEligible,
+    payrollRule: recalc.payrollEligible ? "normal_window" : "outside_window",
     corrected: true,
     correctionReason: req.reason,
     correctedAt: new Date().toISOString(),
@@ -1357,6 +1435,26 @@ function applySnapshot(snapshot) {
   if (Array.isArray(snapshot.timecards)) {
     state.timecards = applyApprovedCorrections(snapshot.timecards);
   }
+  if (Array.isArray(snapshot.lineCorrectionRequests) && snapshot.lineCorrectionRequests.length) {
+    const pending = snapshot.lineCorrectionRequests
+      .filter((r) => r.status === "申請中")
+      .map((r) => ({
+        id: `line-${r.id}`,
+        sourceKey: "",
+        date: (r.createdAt || "").slice(0, 10),
+        employee: r.employee || "未設定",
+        site: r.site || "-",
+        currentCheckIn: "-",
+        currentCheckOut: "-",
+        newCheckIn: "-",
+        newCheckOut: "-",
+        newBreakMin: 0,
+        reason: `LINE修正依頼: ${r.message || ""}`,
+        requestType: "line_request",
+      }));
+    const preserved = state.pendingCorrections.filter((x) => x.requestType !== "line_request");
+    state.pendingCorrections = [...preserved, ...pending];
+  }
   if (snapshot.lineSync) {
     document.getElementById("syncStatus").textContent = "PCへ反映済み";
   }
@@ -1410,6 +1508,7 @@ function recordLocalAction(employee, site, action) {
     const overtime = Math.max(0, Number((hours - 8).toFixed(1)));
     const isLate = checkInAt.getHours() * 60 + checkInAt.getMinutes() > 9 * 60;
 
+    const checkInMin = checkInAt.getHours() * 60 + checkInAt.getMinutes();
     const row = {
       date,
       employee,
@@ -1420,6 +1519,8 @@ function recordLocalAction(employee, site, action) {
       breakMin,
       overtime,
       isLate,
+      payrollEligible: isPayrollEligibleByWindow(checkInMin),
+      payrollRule: isPayrollEligibleByWindow(checkInMin) ? "normal_window" : "outside_window",
     };
     row.sourceKey = sourceKey(row);
     state.timecards.push(row);
@@ -1463,16 +1564,24 @@ async function fetchLineUsers() {
   } catch (_e) {}
 }
 
-async function saveLineUserMapping(userId, employeeId, employeeName, site) {
+async function saveLineUserMapping(userId, employeeId, employeeName, site, geo = {}) {
   if (!API_ENABLED) {
     alert("http/https環境で実行してください（file://は不可）");
     return;
   }
   try {
-    const data = await apiRequest("/api/line/users/map", {
-      method: "POST",
-      body: JSON.stringify({ userId, employeeId, employeeName, site }),
-    });
+      const data = await apiRequest("/api/line/users/map", {
+        method: "POST",
+        body: JSON.stringify({
+          userId,
+          employeeId,
+          employeeName,
+          site,
+          geoLat: geo.geoLat,
+          geoLng: geo.geoLng,
+          geoRadiusM: geo.geoRadiusM,
+        }),
+      });
     if (!data?.ok) throw new Error("save failed");
     await fetchLineUsers();
     alert("LINEユーザー紐付けを保存しました");
@@ -1540,6 +1649,26 @@ async function sendShiftNow(targetDate = "") {
   }
 }
 
+async function sendShiftOne(targetDate = "", employee = "") {
+  if (!API_ENABLED) {
+    alert("http/https環境で実行してください（file://は不可）");
+    return;
+  }
+  const status = document.getElementById("shiftDeliveryStatus");
+  if (status) status.textContent = "個別配信中...";
+  try {
+    const data = await apiRequest("/api/shift/deliver-one", {
+      method: "POST",
+      body: JSON.stringify({ targetDate, employee }),
+    });
+    if (status) {
+      status.textContent = `個別配信完了: ${employee} / 対象${data?.targetDate || "-"} / 送信${data?.sentCount || 0}件`;
+    }
+  } catch (_e) {
+    if (status) status.textContent = "個別配信失敗";
+  }
+}
+
 async function fetchShiftDeliveryStatus() {
   if (!API_ENABLED) return;
   try {
@@ -1558,13 +1687,23 @@ async function lineAction(action) {
   const employee = document.getElementById("lineEmployee")?.value;
   const site = document.getElementById("lineSite")?.value;
   if (!employee || !site) return;
+  if ((action === "checkin" || action === "checkout") && !window.confirm(`${actionLabel(action)}を確定しますか？`)) return;
 
   document.getElementById("syncStatus").textContent = "同期中...";
+  const alcoholValue = Number(document.getElementById("lineAlcoholValue")?.value || 0);
   const payload = {
     employee,
     site,
     action,
+    confirm: true,
     gps: state.currentGps ? { lat: state.currentGps.lat, lng: state.currentGps.lng } : null,
+    alcohol:
+      action === "checkin"
+        ? {
+            value: Number.isFinite(alcoholValue) ? alcoholValue : 0,
+            retentionDays: 730,
+          }
+        : null,
   };
 
   try {
@@ -1637,38 +1776,26 @@ function bindMasterEvents() {
   document.getElementById("routeForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const name = normalizeText(document.getElementById("routeName").value);
+    const geoLat = Number(document.getElementById("routeGeoLat")?.value || NaN);
+    const geoLng = Number(document.getElementById("routeGeoLng")?.value || NaN);
+    const geoRadiusM = Number(document.getElementById("routeGeoRadius")?.value || 300);
     if (!name) return;
     if (state.routes.some((x) => normalizeText(x.name) === name)) {
       alert("同じルート名があります");
       return;
     }
-    state.routes.push({ id: uid("r"), name, active: true });
+    state.routes.push({
+      id: uid("r"),
+      name,
+      active: true,
+      geoLat: Number.isFinite(geoLat) ? geoLat : null,
+      geoLng: Number.isFinite(geoLng) ? geoLng : null,
+      geoRadiusM: Number.isFinite(geoRadiusM) && geoRadiusM > 0 ? geoRadiusM : 300,
+    });
     document.getElementById("routeName").value = "";
-    renderAll();
-  });
-
-  document.getElementById("vehicleForm")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const plate = normalizeText(document.getElementById("vehiclePlate").value);
-    const name = normalizeText(document.getElementById("vehicleName").value);
-    if (!plate || !name) return;
-    if (state.vehicles.some((x) => normalizeText(x.plate) === plate)) {
-      alert("同じ車両番号があります");
-      return;
-    }
-    state.vehicles.push({ id: uid("v"), plate, name, active: true });
-    document.getElementById("vehiclePlate").value = "";
-    document.getElementById("vehicleName").value = "";
-    renderAll();
-  });
-
-  document.getElementById("driverVehicleForm")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const employeeName = document.getElementById("assignEmployee")?.value;
-    const vehicleId = document.getElementById("assignVehicle")?.value;
-    const emp = state.employees.find((x) => x.name === employeeName);
-    if (!emp || !vehicleId) return;
-    state.driverAssignments[emp.id] = vehicleId;
+    if (document.getElementById("routeGeoLat")) document.getElementById("routeGeoLat").value = "";
+    if (document.getElementById("routeGeoLng")) document.getElementById("routeGeoLng").value = "";
+    if (document.getElementById("routeGeoRadius")) document.getElementById("routeGeoRadius").value = "";
     renderAll();
   });
 
@@ -1809,6 +1936,15 @@ function bindMasterEvents() {
       }
       const before = row.name;
       row.name = next;
+      const nextLat = window.prompt("拠点緯度（空欄で未設定）", row.geoLat ?? "");
+      const nextLng = window.prompt("拠点経度（空欄で未設定）", row.geoLng ?? "");
+      const nextRadius = window.prompt("許容半径m", row.geoRadiusM ?? 300);
+      const latNum = Number(nextLat);
+      const lngNum = Number(nextLng);
+      const radiusNum = Number(nextRadius);
+      row.geoLat = Number.isFinite(latNum) ? latNum : null;
+      row.geoLng = Number.isFinite(lngNum) ? lngNum : null;
+      row.geoRadiusM = Number.isFinite(radiusNum) && radiusNum > 0 ? radiusNum : 300;
       renameRouteReferences(before, next);
       renderAll();
       return;
@@ -1827,59 +1963,6 @@ function bindMasterEvents() {
       renderAll();
       syncShiftPlansToServer();
     }
-  });
-
-  document.getElementById("vehicleMasterBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const toggleId = target.getAttribute("data-toggle-vehicle");
-    if (toggleId) {
-      const row = state.vehicles.find((x) => x.id === toggleId);
-      if (!row) return;
-      row.active = !row.active;
-      renderAll();
-      return;
-    }
-    const editId = target.getAttribute("data-edit-vehicle");
-    if (editId) {
-      const row = state.vehicles.find((x) => x.id === editId);
-      if (!row) return;
-      const nextPlate = normalizeText(window.prompt("車両番号を変更", row.plate));
-      const nextName = normalizeText(window.prompt("車両名を変更", row.name));
-      if (!nextPlate || !nextName) return;
-      if (state.vehicles.some((x) => x.id !== row.id && normalizeText(x.plate) === nextPlate)) {
-        alert("同じ車両番号があります");
-        return;
-      }
-      row.plate = nextPlate;
-      row.name = nextName;
-      renderAll();
-      return;
-    }
-    const deleteId = target.getAttribute("data-delete-vehicle");
-    if (deleteId) {
-      const row = state.vehicles.find((x) => x.id === deleteId);
-      if (!row) return;
-      const usingAssignment = Object.values(state.driverAssignments).filter((vId) => vId === row.id).length;
-      const ok = window.confirm(
-        `車両「${row.plate} ${row.name}」を削除します。\nひも付け ${usingAssignment}件は解除されます。\nこの操作は取り消せません。`
-      );
-      if (!ok) return;
-      state.vehicles = state.vehicles.filter((x) => x.id !== row.id);
-      Object.keys(state.driverAssignments).forEach((empId) => {
-        if (state.driverAssignments[empId] === row.id) delete state.driverAssignments[empId];
-      });
-      renderAll();
-    }
-  });
-
-  document.getElementById("driverVehicleBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const empId = target.getAttribute("data-clear-assign");
-    if (!empId) return;
-    delete state.driverAssignments[empId];
-    renderAll();
   });
 
   document.getElementById("shiftPlanBody")?.addEventListener("click", (e) => {
@@ -1921,9 +2004,20 @@ function bindMasterEvents() {
     const userId = document.getElementById("lineUserIdInput")?.value.trim();
     const employeeId = document.getElementById("lineMapEmployee")?.value;
     const site = document.getElementById("lineMapRoute")?.value;
+    const geoLat = Number(document.getElementById("lineMapGeoLat")?.value || NaN);
+    const geoLng = Number(document.getElementById("lineMapGeoLng")?.value || NaN);
+    const geoRadiusM = Number(document.getElementById("lineMapGeoRadius")?.value || 300);
     const employee = state.employees.find((x) => x.id === employeeId);
     if (!userId || !employeeId || !site || !employee) return;
-    await saveLineUserMapping(userId, employeeId, employee.name, site);
+    const route = state.routes.find((r) => r.name === site);
+    const finalGeoLat = Number.isFinite(geoLat) ? geoLat : Number(route?.geoLat);
+    const finalGeoLng = Number.isFinite(geoLng) ? geoLng : Number(route?.geoLng);
+    const finalGeoRadius = Number.isFinite(geoRadiusM) && geoRadiusM > 0 ? geoRadiusM : Number(route?.geoRadiusM || 300);
+    await saveLineUserMapping(userId, employeeId, employee.name, site, {
+      geoLat: Number.isFinite(finalGeoLat) ? finalGeoLat : null,
+      geoLng: Number.isFinite(finalGeoLng) ? finalGeoLng : null,
+      geoRadiusM: Number.isFinite(finalGeoRadius) && finalGeoRadius > 0 ? finalGeoRadius : 300,
+    });
   });
 
   document.getElementById("lineUsersBody")?.addEventListener("click", (e) => {
@@ -1942,10 +2036,19 @@ function bindMasterEvents() {
     if (input) input.value = userId;
     const empSelect = document.getElementById("lineMapEmployee");
     const siteSelect = document.getElementById("lineMapRoute");
+    const latInput = document.getElementById("lineMapGeoLat");
+    const lngInput = document.getElementById("lineMapGeoLng");
+    const radiusInput = document.getElementById("lineMapGeoRadius");
     const empId = target.getAttribute("data-fill-emp-id");
     const site = target.getAttribute("data-fill-site");
+    const geoLat = target.getAttribute("data-fill-geo-lat");
+    const geoLng = target.getAttribute("data-fill-geo-lng");
+    const geoRadius = target.getAttribute("data-fill-geo-radius");
     if (empSelect && empId) empSelect.value = empId;
     if (siteSelect && site) siteSelect.value = site;
+    if (latInput && geoLat) latInput.value = geoLat;
+    if (lngInput && geoLng) lngInput.value = geoLng;
+    if (radiusInput && geoRadius) radiusInput.value = geoRadius;
   });
 
   document.getElementById("leaveRequestBody")?.addEventListener("click", (e) => {
@@ -1976,6 +2079,42 @@ function bindMasterEvents() {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     sendShiftNow(tomorrow.toISOString().slice(0, 10));
+  });
+
+  document.getElementById("sendShiftOneBtn")?.addEventListener("click", () => {
+    const employee = document.getElementById("shiftEmployee")?.value || "";
+    if (!employee) {
+      alert("送信対象の社員を選択してください");
+      return;
+    }
+    const targetDate = document.getElementById("shiftDate")?.value || new Date().toISOString().slice(0, 10);
+    sendShiftOne(targetDate, employee);
+  });
+
+  document.getElementById("shiftCsvInput")?.addEventListener("change", async (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement) || !input.files?.length) return;
+    const file = input.files[0];
+    const text = await file.text();
+    const rows = parseShiftCsv(text);
+    if (!rows.length) {
+      alert("CSVの取り込み行がありません。列は date,employee,start,end,route を使用してください。");
+      return;
+    }
+    rows.forEach((row) => {
+      const existing = state.shiftPlans.find((s) => s.date === row.date && s.employee === row.employee);
+      if (existing) {
+        existing.start = row.start;
+        existing.end = row.end;
+        existing.route = row.route;
+      } else {
+        state.shiftPlans.push({ id: uid("s"), ...row });
+      }
+    });
+    renderAll();
+    syncShiftPlansToServer();
+    alert(`シフトCSVを ${rows.length} 件取り込みました`);
+    input.value = "";
   });
 }
 
@@ -2056,11 +2195,15 @@ function bindEvents() {
   });
 
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);
+  document.getElementById("routeUseMapUrlBtn")?.addEventListener("click", () => fillGeoFromMapUrl("route"));
+  document.getElementById("routeUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("route"));
+  document.getElementById("lineMapUseMapUrlBtn")?.addEventListener("click", () => fillGeoFromMapUrl("lineMap"));
+  document.getElementById("lineMapUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("lineMap"));
 
   document.getElementById("lineCheckInBtn")?.addEventListener("click", () => lineAction("checkin"));
   document.getElementById("lineCheckOutBtn")?.addEventListener("click", () => lineAction("checkout"));
   document.getElementById("lineBreakStartBtn")?.addEventListener("click", () => lineAction("breakStart"));
-  document.getElementById("lineBreakEndBtn")?.addEventListener("click", () => lineAction("breakEnd"));
+  document.getElementById("lineCorrectionBtn")?.addEventListener("click", requestCorrectionByEmployee);
 
   document.getElementById("timecardTableBody")?.addEventListener("click", (e) => {
     const target = e.target;
