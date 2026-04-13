@@ -171,6 +171,12 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
 
     const pendingConfirm = getPendingConfirm(db, userId);
     if (pendingConfirm) {
+      if (text === "キャンセル") {
+        clearPendingConfirm(db, userId);
+        writeDb(db);
+        await sendLineReply(event.replyToken, "確認をキャンセルしました。", { withQuickReply: true });
+        continue;
+      }
       const expected = `${actionLabel(pendingConfirm.action)}確定`;
       if (text === expected) {
         clearPendingConfirm(db, userId);
@@ -196,7 +202,11 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         await sendLineReply(event.replyToken, msg, { withQuickReply: true });
         continue;
       }
-      await sendLineReply(event.replyToken, `確認中です。「${expected}」を送信してください。`, { withQuickReply: true });
+      await sendLineReply(event.replyToken, `確認中です。「${expected}」を押してください。`, {
+        withQuickReply: true,
+        quickReplyType: "confirm",
+        confirmAction: pendingConfirm.action,
+      });
       continue;
     }
 
@@ -252,8 +262,10 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     if ((action === "checkin" || action === "checkout") && needsConfirmAction(action)) {
       setPendingConfirm(db, userId, { action, employee, site });
       writeDb(db);
-      await sendLineReply(event.replyToken, `「${actionLabel(action)}」でよければ「${actionLabel(action)}確定」と送信してください。`, {
+      await sendLineReply(event.replyToken, `「${actionLabel(action)}」でよければ「${actionLabel(action)}確定」を押してください。`, {
         withQuickReply: true,
+        quickReplyType: "confirm",
+        confirmAction: action,
       });
       continue;
     }
@@ -858,6 +870,28 @@ function getAttendanceQuickReplyItems() {
   ];
 }
 
+function getConfirmQuickReplyItems(action) {
+  const label = actionLabel(action);
+  return [
+    {
+      type: "action",
+      action: { type: "message", label: `${label}確定`, text: `${label}確定` },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "キャンセル", text: "キャンセル" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "明日シフト", text: "明日シフト確認" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "修正依頼", text: "修正依頼 退勤取消" },
+    },
+  ];
+}
+
 function getAlcoholQuickReplyItems() {
   return [
     {
@@ -888,8 +922,11 @@ async function sendLineReply(replyToken, text, options = {}) {
   const message = { type: "text", text };
   if (options.withQuickReply) {
     const type = options.quickReplyType || "attendance";
+    let items = getAttendanceQuickReplyItems();
+    if (type === "alcohol") items = getAlcoholQuickReplyItems();
+    if (type === "confirm") items = getConfirmQuickReplyItems(options.confirmAction || "checkin");
     message.quickReply = {
-      items: type === "alcohol" ? getAlcoholQuickReplyItems() : getAttendanceQuickReplyItems(),
+      items,
     };
   }
   try {
