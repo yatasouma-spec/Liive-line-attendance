@@ -15,6 +15,9 @@ const LINE_USER_MAP = safeJsonParse(process.env.LINE_USER_MAP_JSON, {});
 const APP_TIMEZONE = "Asia/Tokyo";
 const SHIFT_AUTO_SEND_HOUR = Number(process.env.SHIFT_AUTO_SEND_HOUR || 18);
 const SHIFT_AUTO_SEND_MINUTE = Number(process.env.SHIFT_AUTO_SEND_MINUTE || 0);
+const ATTENDANCE_CONFIRM_WINDOW_MIN = Number(process.env.ATTENDANCE_CONFIRM_WINDOW_MIN || 2);
+const ALCOHOL_LIMIT = Number(process.env.ALCOHOL_LIMIT || 0);
+const EVIDENCE_RETENTION_DAYS = Number(process.env.EVIDENCE_RETENTION_DAYS || 730);
 
 ensureDataFile();
 
@@ -42,19 +45,191 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       );
       continue;
     }
-    if (event.type !== "message" || event.message?.type !== "text") continue;
+    if (event.type !== "message") continue;
+
     const db = readDb();
     const profile = db.userMap?.[userId] || LINE_USER_MAP[userId] || {};
     const employee = profile.employeeName || profile.employee || `LINE-${userId.slice(-4)}`;
     const site = profile.site || "LINE現場";
-    console.log(
-      `[LINE][message] userId=${userId} mapped=${profile.employeeName || profile.employee ? "yes" : "no"} employee=${employee} text=${text}`
-    );
+    const mapped = profile.employeeName || profile.employee ? "yes" : "no";
+
+    if (event.message?.type === "location") {
+      const lat = Number(event.message.latitude);
+      const lng = Number(event.message.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      db.lastLocations = db.lastLocations || {};
+      db.lastLocations[userId] = {
+        lat,
+        lng,
+        at: new Date().toISOString(),
+      };
+      const flow = db.lineWorkflows?.[userId];
+      if (flow?.type === "checkin" && flow.stage === "need_location") {
+        const inside = isInsideGeofence(profile, { lat, lng });
+        if (!inside) {
+          writeDb(db);
+          await sendLineReply(event.replyToken, "登録現場の範囲外です。現場付近で再度位置情報を送信してください。");
+          continue;
+        }
+        db.alcoholEvidence = db.alcoholEvidence || [];
+        db.alcoholEvidence.push({
+          userId,
+          employee: flow.employee,
+          site: flow.site,
+          alcoholValue: Number(flow.alcoholValue || 0),
+          meterImageId: flow.meterImageId || "",
+          faceImageId: flow.faceImageId || "",
+          gps: { lat, lng },
+          at: new Date().toISOString(),
+          expiresAt: Date.now() + EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+        });
+        db.alcoholEvidence = db.alcoholEvidence.filter((row) => Number(row.expiresAt || 0) >= Date.now()).slice(-10000);
+        delete db.lineWorkflows[userId];
+        writeDb(db);
+        const snapshot = processLineAction({
+          employee,
+          site,
+          action: "checkin",
+          source: "LINE",
+          lineUserId: userId,
+          gps: { lat, lng },
+          alcohol: {
+            value: Number(flow.alcoholValue || 0),
+            meterImageId: flow.meterImageId || "",
+            faceImageId: flow.faceImageId || "",
+            retentionDays: EVIDENCE_RETENTION_DAYS,
+          },
+        });
+        const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
+        await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        continue;
+      }
+      writeDb(db);
+      await sendLineReply(event.replyToken, `位置情報を受け付けました（${employee}）`, { withQuickReply: true });
+      continue;
+    }
+    if (event.message?.type === "image") {
+      const flow = db.lineWorkflows?.[userId];
+      if (!flow || flow.type !== "checkin") {
+        await sendLineReply(event.replyToken, "画像を受け付けました。必要時に案内に従って送信してください。", {
+          withQuickReply: true,
+        });
+        continue;
+      }
+      if (flow.stage === "need_meter_photo") {
+        flow.meterImageId = event.message.id;
+        flow.stage = "need_face_photo";
+        flow.updatedAt = new Date().toISOString();
+        db.lineWorkflows[userId] = flow;
+        writeDb(db);
+        await sendLineReply(event.replyToken, "アルコール測定器の写真を確認しました。次に本人写真を送信してください。");
+        continue;
+      }
+      if (flow.stage === "need_face_photo") {
+        flow.faceImageId = event.message.id;
+        flow.stage = "need_location";
+        flow.updatedAt = new Date().toISOString();
+        db.lineWorkflows[userId] = flow;
+        writeDb(db);
+        await sendLineReply(event.replyToken, "本人写真を確認しました。位置情報を送信してください（トーク画面の「＋」→位置情報）。");
+        continue;
+      }
+      await sendLineReply(event.replyToken, "画像は受信済みです。次の案内に沿って送信してください。");
+      continue;
+    }
+    if (event.message?.type !== "text") continue;
+
+    console.log(`[LINE][message] userId=${userId} mapped=${mapped} employee=${employee} text=${text}`);
 
     if (text === "メニュー" || text === "menu") {
-      await sendLineReply(event.replyToken, "勤怠メニューです。ボタンを押してください。", {
-        withQuickReply: true,
+      await sendLineReply(event.replyToken, "勤怠メニューです。ボタンを押してください。", { withQuickReply: true });
+      continue;
+    }
+
+    if (text.includes("修正依頼")) {
+      db.lineCorrectionRequests = db.lineCorrectionRequests || [];
+      db.lineCorrectionRequests.push({
+        id: `corr-${Date.now()}`,
+        userId,
+        employee,
+        site,
+        message: text,
+        status: "申請中",
+        createdAt: new Date().toISOString(),
       });
+      db.lineCorrectionRequests = db.lineCorrectionRequests.slice(-1000);
+      writeDb(db);
+      await sendLineReply(event.replyToken, "修正依頼を受け付けました。管理者が承認後に反映します。");
+      continue;
+    }
+
+    const pendingConfirm = getPendingConfirm(db, userId);
+    if (pendingConfirm) {
+      const expected = `${actionLabel(pendingConfirm.action)}確定`;
+      if (text === expected) {
+        clearPendingConfirm(db, userId);
+        if (pendingConfirm.action === "checkin") {
+          startCheckinFlow(db, userId, pendingConfirm.employee, pendingConfirm.site);
+          writeDb(db);
+          await sendLineReply(
+            event.replyToken,
+            `出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`,
+            { withQuickReply: true, quickReplyType: "alcohol" }
+          );
+          continue;
+        }
+        writeDb(db);
+        const snapshot = processLineAction({
+          employee: pendingConfirm.employee,
+          site: pendingConfirm.site,
+          action: pendingConfirm.action,
+          source: "LINE",
+          lineUserId: userId,
+        });
+        const msg = `受け付けました: ${pendingConfirm.employee} / ${pendingConfirm.site} / ${actionLabel(pendingConfirm.action)} (${snapshot.lineSync?.time || "-"})`;
+        await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        continue;
+      }
+      await sendLineReply(event.replyToken, `確認中です。「${expected}」を送信してください。`, { withQuickReply: true });
+      continue;
+    }
+
+    const flow = db.lineWorkflows?.[userId];
+    if (flow?.type === "checkin") {
+      if (flow.stage === "need_alcohol" && text === "ALC その他") {
+        await sendLineReply(
+          event.replyToken,
+          "飲酒値を手入力してください（例: 0.03 または ALC 0.03）。",
+          { withQuickReply: true, quickReplyType: "alcohol" }
+        );
+        continue;
+      }
+      const next = advanceCheckinFlow(db, userId, text, profile);
+      writeDb(db);
+      if (next.finalize) {
+        const snapshot = processLineAction({
+          employee,
+          site,
+          action: "checkin",
+          source: "LINE",
+          lineUserId: userId,
+          gps: next.gps || null,
+          alcohol: {
+            value: next.alcoholValue,
+            meterImageId: next.meterImageId || "",
+            faceImageId: next.faceImageId || "",
+            retentionDays: EVIDENCE_RETENTION_DAYS,
+          },
+        });
+        const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
+        await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+      } else {
+        const nextQuickReplyType = /飲酒値/.test(next.message) ? "alcohol" : "attendance";
+        await sendLineReply(event.replyToken, next.message, {
+          withQuickReply: next.withQuickReply,
+          quickReplyType: nextQuickReplyType,
+        });
+      }
       continue;
     }
 
@@ -64,6 +239,26 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         event.replyToken,
         "認識できませんでした。下のボタンから打刻してください。",
         { withQuickReply: true }
+      );
+      continue;
+    }
+
+    if ((action === "checkin" || action === "checkout") && needsConfirmAction(action)) {
+      setPendingConfirm(db, userId, { action, employee, site });
+      writeDb(db);
+      await sendLineReply(event.replyToken, `「${actionLabel(action)}」でよければ「${actionLabel(action)}確定」と送信してください。`, {
+        withQuickReply: true,
+      });
+      continue;
+    }
+
+    if (action === "checkin") {
+      startCheckinFlow(db, userId, employee, site);
+      writeDb(db);
+      await sendLineReply(
+        event.replyToken,
+        `出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`,
+        { withQuickReply: true, quickReplyType: "alcohol" }
       );
       continue;
     }
@@ -89,18 +284,29 @@ app.get("/api/bootstrap", (_req, res) => {
     lineSync: db.lineSync,
     logs: db.logs.slice(-200),
     timecards: db.timecards.slice(-1000),
+    lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
   });
 });
 
 app.post("/api/line-action", (req, res) => {
-  const { employee, site, action } = req.body || {};
+  const { employee, site, action, gps, alcohol, confirm } = req.body || {};
   if (!employee || !site || !action) {
     return res.status(400).json({ ok: false, error: "employee/site/action are required" });
   }
   if (!["checkin", "checkout", "breakStart", "breakEnd"].includes(action)) {
     return res.status(400).json({ ok: false, error: "invalid action" });
   }
-  const snapshot = processLineAction({ employee, site, action, source: "WEB" });
+  if ((action === "checkin" || action === "checkout") && confirm !== true) {
+    return res.status(400).json({ ok: false, error: "confirm is required for checkin/checkout" });
+  }
+  const snapshot = processLineAction({
+    employee,
+    site,
+    action,
+    source: "WEB",
+    gps: gps || null,
+    alcohol: alcohol || null,
+  });
   res.json({ ok: true, snapshot });
 });
 
@@ -115,13 +321,16 @@ app.get("/api/line/users", (_req, res) => {
     employeeId: mergedUserMap[userId]?.employeeId || "",
     employee: mergedUserMap[userId]?.employeeName || mergedUserMap[userId]?.employee || "",
     site: mergedUserMap[userId]?.site || "",
+    geoLat: mergedUserMap[userId]?.geoLat ?? null,
+    geoLng: mergedUserMap[userId]?.geoLng ?? null,
+    geoRadiusM: mergedUserMap[userId]?.geoRadiusM ?? 300,
   }));
   users.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
   res.json({ ok: true, users });
 });
 
 app.post("/api/line/users/map", (req, res) => {
-  const { userId, employeeId, employeeName, site } = req.body || {};
+  const { userId, employeeId, employeeName, site, geoLat, geoLng, geoRadiusM } = req.body || {};
   if (!userId || !employeeName || !site) {
     return res.status(400).json({ ok: false, error: "userId/employeeName/site are required" });
   }
@@ -131,6 +340,9 @@ app.post("/api/line/users/map", (req, res) => {
     employeeId: employeeId || "",
     employeeName,
     site,
+    geoLat: Number.isFinite(Number(geoLat)) ? Number(geoLat) : null,
+    geoLng: Number.isFinite(Number(geoLng)) ? Number(geoLng) : null,
+    geoRadiusM: Number.isFinite(Number(geoRadiusM)) && Number(geoRadiusM) > 0 ? Number(geoRadiusM) : 300,
   };
   backfillPlaceholderEmployee(db, userId, employeeName);
   registerSeenLineUser(db, userId, "");
@@ -200,6 +412,14 @@ app.post("/api/shift/deliver-daily", async (req, res) => {
   res.json({ ok: true, ...result });
 });
 
+app.post("/api/shift/deliver-one", async (req, res) => {
+  const targetDate = String(req.body?.targetDate || "").trim() || getJstDateOffset(1);
+  const employee = String(req.body?.employee || "").trim();
+  if (!employee) return res.status(400).json({ ok: false, error: "employee is required" });
+  const result = await deliverShiftToEmployee(targetDate, employee);
+  res.json({ ok: true, ...result });
+});
+
 app.get("/api/shift/delivery-status", (_req, res) => {
   const db = readDb();
   res.json({
@@ -266,7 +486,198 @@ function actionLabel(action) {
   return action;
 }
 
-function processLineAction({ employee, site, action, source, lineUserId = "" }) {
+function needsConfirmAction(action) {
+  return action === "checkin" || action === "checkout";
+}
+
+function isPayrollEligibleByWindow(checkInMinutes) {
+  if (!Number.isFinite(checkInMinutes)) return false;
+  return checkInMinutes >= 8 * 60 + 50 && checkInMinutes <= 9 * 60 + 10;
+}
+
+function setPendingConfirm(db, userId, payload) {
+  db.pendingActionConfirm = db.pendingActionConfirm || {};
+  db.pendingActionConfirm[userId] = {
+    ...payload,
+    expiresAt: Date.now() + ATTENDANCE_CONFIRM_WINDOW_MIN * 60 * 1000,
+  };
+}
+
+function getPendingConfirm(db, userId) {
+  const row = db.pendingActionConfirm?.[userId];
+  if (!row) return null;
+  if (Number(row.expiresAt || 0) < Date.now()) {
+    delete db.pendingActionConfirm[userId];
+    return null;
+  }
+  return row;
+}
+
+function clearPendingConfirm(db, userId) {
+  if (!db.pendingActionConfirm) return;
+  delete db.pendingActionConfirm[userId];
+}
+
+function startCheckinFlow(db, userId, employee, site) {
+  db.lineWorkflows = db.lineWorkflows || {};
+  db.lineWorkflows[userId] = {
+    type: "checkin",
+    stage: "need_alcohol",
+    employee,
+    site,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function parseAlcoholValue(text) {
+  const cleaned = String(text || "")
+    .replace(/alc/gi, "")
+    .replace(/[^\d.]/g, "")
+    .trim();
+  if (!cleaned) return null;
+  const value = Number(cleaned);
+  if (!Number.isFinite(value)) return null;
+  return Math.max(0, value);
+}
+
+function getLatestLocation(db, userId) {
+  const row = db.lastLocations?.[userId];
+  if (!row) return null;
+  if (!Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) return null;
+  return { lat: Number(row.lat), lng: Number(row.lng), at: row.at || null };
+}
+
+function isInsideGeofence(profile, gps) {
+  const lat = Number(profile?.geoLat);
+  const lng = Number(profile?.geoLng);
+  const radiusM = Number(profile?.geoRadiusM || 300);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return true;
+  if (!gps || !Number.isFinite(Number(gps.lat)) || !Number.isFinite(Number(gps.lng))) return false;
+  const distance = haversineMeters(lat, lng, Number(gps.lat), Number(gps.lng));
+  return distance <= radiusM;
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function advanceCheckinFlow(db, userId, text, profile) {
+  const flow = db.lineWorkflows?.[userId];
+  if (!flow) {
+    return { message: "出勤ボタンから再開してください。", withQuickReply: true, finalize: false };
+  }
+
+  if (flow.stage === "need_alcohol") {
+    const alcoholValue = parseAlcoholValue(text);
+    if (alcoholValue === null) {
+      return {
+        message: "飲酒値を送信してください（例: ALC 0.00）。",
+        withQuickReply: true,
+        finalize: false,
+      };
+    }
+    if (alcoholValue > ALCOHOL_LIMIT) {
+      delete db.lineWorkflows[userId];
+      db.logs.push({
+        date: toJstParts(new Date()).date,
+        time: toJstParts(new Date()).time,
+        employee: flow.employee,
+        site: flow.site,
+        action: "出勤不可(飲酒超過)",
+        source: "LINE",
+        lineUserId: userId,
+      });
+      db.logs = db.logs.slice(-2000);
+      return {
+        message: `飲酒値 ${alcoholValue.toFixed(2)} は規定値を超えています。出勤は反映されません。`,
+        withQuickReply: true,
+        finalize: false,
+      };
+    }
+    flow.alcoholValue = alcoholValue;
+    flow.stage = "need_meter_photo";
+    flow.updatedAt = new Date().toISOString();
+    db.lineWorkflows[userId] = flow;
+    return {
+      message: "飲酒値を確認しました。次に測定器の写真を送信してください。",
+      withQuickReply: false,
+      finalize: false,
+    };
+  }
+
+  if (flow.stage === "need_meter_photo") {
+    return {
+      message: "測定器写真の送信待ちです。画像を送信してください。",
+      withQuickReply: false,
+      finalize: false,
+    };
+  }
+
+  if (flow.stage === "need_face_photo") {
+    return {
+      message: "本人写真の送信待ちです。画像を送信してください。",
+      withQuickReply: false,
+      finalize: false,
+    };
+  }
+
+  if (flow.stage === "need_location") {
+    const gps = getLatestLocation(db, userId);
+    if (!gps) {
+      return {
+        message: "位置情報の送信待ちです。トークの「＋」から位置情報を送信してください。",
+        withQuickReply: false,
+        finalize: false,
+      };
+    }
+    if (!isInsideGeofence(profile, gps)) {
+      return {
+        message: "登録現場の範囲外です。現場付近で再度位置情報を送信してください。",
+        withQuickReply: false,
+        finalize: false,
+      };
+    }
+    const output = {
+      message: "出勤チェック完了。打刻を反映します。",
+      withQuickReply: true,
+      finalize: true,
+      alcoholValue: Number(flow.alcoholValue || 0),
+      meterImageId: flow.meterImageId || "",
+      faceImageId: flow.faceImageId || "",
+      gps: { lat: gps.lat, lng: gps.lng },
+    };
+    db.alcoholEvidence = db.alcoholEvidence || [];
+    db.alcoholEvidence.push({
+      userId,
+      employee: flow.employee,
+      site: flow.site,
+      alcoholValue: output.alcoholValue,
+      meterImageId: output.meterImageId,
+      faceImageId: output.faceImageId,
+      gps: output.gps,
+      at: new Date().toISOString(),
+      expiresAt: Date.now() + EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    });
+    db.alcoholEvidence = db.alcoholEvidence.filter((row) => Number(row.expiresAt || 0) >= Date.now()).slice(-10000);
+    delete db.lineWorkflows[userId];
+    return output;
+  }
+
+  return { message: "出勤フローを再開してください。", withQuickReply: true, finalize: false };
+}
+
+function processLineAction({ employee, site, action, source, lineUserId = "", gps = null, alcohol = null }) {
   const now = new Date();
   const nowJst = toJstParts(now);
   const time = nowJst.time;
@@ -286,6 +697,8 @@ function processLineAction({ employee, site, action, source, lineUserId = "" }) 
       site,
       employeeName: employee,
       lineUserId: lineUserId || null,
+      checkInGps: gps || null,
+      alcohol: alcohol || null,
     };
     db.logs.push({ date, time, employee, site, action: "出勤", source, lineUserId: lineUserId || null });
     db.lineSync = { employee, site, action: "出勤", time, dateISO: now.toISOString(), lineUserId: lineUserId || null };
@@ -328,6 +741,7 @@ function processLineAction({ employee, site, action, source, lineUserId = "" }) 
       const hours = Math.max(0.5, Number((rawHours - breakMin / 60).toFixed(1)));
       const overtime = Math.max(0, Number((hours - 8).toFixed(1)));
       const isLate = Number(userCheckin.checkInMinutes || 0) > 9 * 60;
+      const payrollEligible = isPayrollEligibleByWindow(Number(userCheckin.checkInMinutes || 0));
       const checkInJst = toJstParts(checkInAt);
 
       db.timecards.push({
@@ -341,6 +755,10 @@ function processLineAction({ employee, site, action, source, lineUserId = "" }) 
         breakMin,
         overtime,
         isLate,
+        payrollEligible,
+        payrollRule: payrollEligible ? "normal_window" : "outside_window",
+        checkInGps: userCheckin.checkInGps || null,
+        alcohol: userCheckin.alcohol || null,
       });
       db.logs.push({ date, time, employee: sessionEmployee, site, action: "退勤", source, hours, breakMin, overtime, lineUserId: lineUserId || null });
       db.lineSync = {
@@ -429,7 +847,32 @@ function getAttendanceQuickReplyItems() {
     },
     {
       type: "action",
-      action: { type: "message", label: "休憩終了", text: "休憩終了" },
+      action: { type: "message", label: "修正依頼", text: "修正依頼 退勤取消" },
+    },
+  ];
+}
+
+function getAlcoholQuickReplyItems() {
+  return [
+    {
+      type: "action",
+      action: { type: "message", label: "0.00", text: "ALC 0.00" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "0.05", text: "ALC 0.05" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "0.10", text: "ALC 0.10" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "0.15", text: "ALC 0.15" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "その他", text: "ALC その他" },
     },
   ];
 }
@@ -438,7 +881,10 @@ async function sendLineReply(replyToken, text, options = {}) {
   if (!LINE_CHANNEL_ACCESS_TOKEN || !replyToken) return;
   const message = { type: "text", text };
   if (options.withQuickReply) {
-    message.quickReply = { items: getAttendanceQuickReplyItems() };
+    const type = options.quickReplyType || "attendance";
+    message.quickReply = {
+      items: type === "alcohol" ? getAlcoholQuickReplyItems() : getAttendanceQuickReplyItems(),
+    };
   }
   try {
     await fetch("https://api.line.me/v2/bot/message/reply", {
@@ -549,6 +995,22 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
   return { targetDate, sentCount, skippedCount };
 }
 
+async function deliverShiftToEmployee(targetDate, employeeName) {
+  const db = readDb();
+  const userMap = db.userMap || {};
+  const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
+  const targetUserId = Object.keys(userMap).find((uid) => (userMap[uid]?.employeeName || userMap[uid]?.employee || "") === employeeName);
+  if (!targetUserId) return { targetDate, employee: employeeName, sentCount: 0, skippedCount: 1 };
+
+  const userPlans = plans.filter((p) => p.date === targetDate && p.employee === employeeName);
+  const message =
+    userPlans.length > 0
+      ? `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\n` + userPlans.map((p, i) => `${i + 1}. ${p.start}-${p.end} / ${p.route}`).join("\n")
+      : `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\nシフトは未登録です。管理者に確認してください。`;
+  const ok = await sendLinePush(targetUserId, message);
+  return { targetDate, employee: employeeName, sentCount: ok ? 1 : 0, skippedCount: ok ? 0 : 1 };
+}
+
 async function runShiftAutoDelivery() {
   const now = getJstNowParts();
   if (now.hour !== SHIFT_AUTO_SEND_HOUR || now.minute !== SHIFT_AUTO_SEND_MINUTE) return;
@@ -576,6 +1038,11 @@ function ensureDataFile() {
       lineUsersSeen: {},
       shiftPlans: [],
       shiftDelivery: null,
+      pendingActionConfirm: {},
+      lineWorkflows: {},
+      lastLocations: {},
+      lineCorrectionRequests: [],
+      alcoholEvidence: [],
     });
   }
 }
@@ -592,10 +1059,29 @@ function readDb() {
       parsed.lineUsersSeen = parsed.lineUsersSeen || {};
       parsed.shiftPlans = Array.isArray(parsed.shiftPlans) ? parsed.shiftPlans : [];
       parsed.shiftDelivery = parsed.shiftDelivery || null;
+      parsed.pendingActionConfirm = parsed.pendingActionConfirm || {};
+      parsed.lineWorkflows = parsed.lineWorkflows || {};
+      parsed.lastLocations = parsed.lastLocations || {};
+      parsed.lineCorrectionRequests = Array.isArray(parsed.lineCorrectionRequests) ? parsed.lineCorrectionRequests : [];
+      parsed.alcoholEvidence = Array.isArray(parsed.alcoholEvidence) ? parsed.alcoholEvidence : [];
       return parsed;
     }
   } catch (_e) {}
-  return { checkins: {}, lineSync: null, logs: [], timecards: [], userMap: {}, lineUsersSeen: {}, shiftPlans: [], shiftDelivery: null };
+  return {
+    checkins: {},
+    lineSync: null,
+    logs: [],
+    timecards: [],
+    userMap: {},
+    lineUsersSeen: {},
+    shiftPlans: [],
+    shiftDelivery: null,
+    pendingActionConfirm: {},
+    lineWorkflows: {},
+    lastLocations: {},
+    lineCorrectionRequests: [],
+    alcoholEvidence: [],
+  };
 }
 
 function writeDb(data) {
