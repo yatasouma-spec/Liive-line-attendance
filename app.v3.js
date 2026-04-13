@@ -478,7 +478,7 @@ function generateAutoFillCandidates() {
       newCheckIn: plan.start,
       newCheckOut: plan.end,
       newBreakMin: 60,
-      reason: "打刻漏れ自動補完（シフト予定ベース）",
+      reason: "打刻漏れ自動補正（シフト予定ベース）",
       requestType: "auto_fill",
     });
     created += 1;
@@ -776,7 +776,7 @@ function renderPendingApprovals() {
       <td>${row.date}</td>
       <td>${row.employee}</td>
       <td>${row.currentCheckIn}→${row.newCheckIn} / ${row.currentCheckOut}→${row.newCheckOut}${row.site ? ` / ${row.site}` : ""}</td>
-      <td>${row.requestType === "auto_fill" ? "【自動補完】" : ""}${row.reason}</td>
+      <td>${row.requestType === "auto_fill" ? "【自動補正】" : ""}${row.reason}</td>
       <td>
         ${
           row.requestType === "line_request"
@@ -2191,7 +2191,7 @@ function bindEvents() {
   document.getElementById("generateAutoFillBtn")?.addEventListener("click", () => {
     const created = generateAutoFillCandidates();
     renderAll();
-    alert(created > 0 ? `打刻漏れ補完候補を ${created} 件作成しました。` : "追加できる補完候補はありませんでした。");
+    alert(created > 0 ? `打刻漏れの修正候補を ${created} 件作成しました。` : "追加できる修正候補はありませんでした。");
   });
 
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);

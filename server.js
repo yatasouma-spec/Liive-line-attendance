@@ -1028,11 +1028,11 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
     const userPlans = byEmployee.get(employeeName) || [];
     const message =
       userPlans.length > 0
-        ? `【Liive シフト連絡】\\n対象日: ${formatYmdJp(targetDate)}\\n` +
+        ? `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\n` +
           userPlans
             .map((p, i) => `${i + 1}. ${p.start}-${p.end} / ${p.route}`)
-            .join("\\n")
-        : `【Liive シフト連絡】\\n対象日: ${formatYmdJp(targetDate)}\\nシフトは未登録です。管理者に確認してください。`;
+            .join("\n")
+        : `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\nシフトは未登録です。管理者に確認してください。`;
 
     const ok = await sendLinePush(userId, message);
     if (ok) sentCount += 1;
