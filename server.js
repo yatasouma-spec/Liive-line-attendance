@@ -132,6 +132,7 @@ app.post("/api/line/users/map", (req, res) => {
     employeeName,
     site,
   };
+  backfillPlaceholderEmployee(db, userId, employeeName);
   registerSeenLineUser(db, userId, "");
   writeDb(db);
   console.log(`[LINE][map] userId=${userId} -> employee=${employeeName} site=${site}`);
@@ -333,6 +334,7 @@ function processLineAction({ employee, site, action, source, lineUserId = "" }) 
         date,
         employee: sessionEmployee,
         site: userCheckin.site || site,
+        lineUserId: lineUserId || userCheckin.lineUserId || null,
         checkIn: checkInJst.time,
         checkOut: time,
         hours,
@@ -606,6 +608,33 @@ function safeJsonParse(text, fallback) {
   } catch (_e) {
     return fallback;
   }
+}
+
+function backfillPlaceholderEmployee(db, userId, employeeName) {
+  if (!db || !userId || !employeeName) return;
+  const placeholder = `LINE-${String(userId).slice(-4)}`;
+
+  (db.logs || []).forEach((row) => {
+    if (!row || typeof row !== "object") return;
+    const byUser = row.lineUserId && row.lineUserId === userId;
+    const byPlaceholder = row.employee === placeholder;
+    if (byUser || byPlaceholder) row.employee = employeeName;
+  });
+
+  (db.timecards || []).forEach((row) => {
+    if (!row || typeof row !== "object") return;
+    const byUser = row.lineUserId && row.lineUserId === userId;
+    const byPlaceholder = row.employee === placeholder;
+    if (byUser || byPlaceholder) row.employee = employeeName;
+  });
+
+  Object.keys(db.checkins || {}).forEach((key) => {
+    const row = db.checkins[key];
+    if (!row || typeof row !== "object") return;
+    const byUser = row.lineUserId && row.lineUserId === userId;
+    const byPlaceholder = row.employeeName === placeholder;
+    if (byUser || byPlaceholder) row.employeeName = employeeName;
+  });
 }
 
 function buildComplianceChecklist(payload) {

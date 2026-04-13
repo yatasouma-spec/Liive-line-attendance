@@ -169,6 +169,18 @@ function normalizeText(value) {
   return String(value).trim();
 }
 
+function reconcileLineDisplayNames() {
+  if (!Array.isArray(state.lineUsers) || !state.lineUsers.length) return;
+  state.lineUsers.forEach((u) => {
+    const employee = normalizeText(u.employee || "");
+    const userId = normalizeText(u.userId || "");
+    if (!employee || !userId) return;
+    const placeholder = `LINE-${userId.slice(-4)}`;
+    if (placeholder === employee) return;
+    renameEmployeeReferences(placeholder, employee);
+  });
+}
+
 function renameEmployeeReferences(oldName, newName) {
   if (!oldName || !newName || oldName === newName) return;
   state.logs.forEach((row) => {
@@ -1446,7 +1458,8 @@ async function fetchLineUsers() {
     const data = await apiRequest("/api/line/users");
     if (!data?.ok) return;
     state.lineUsers = Array.isArray(data.users) ? data.users : [];
-    renderMasters();
+    reconcileLineDisplayNames();
+    renderAll();
   } catch (_e) {}
 }
 
