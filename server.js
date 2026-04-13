@@ -145,6 +145,12 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       await sendLineReply(event.replyToken, "勤怠メニューです。ボタンを押してください。", { withQuickReply: true });
       continue;
     }
+    if (text.includes("明日シフト確認") || text.includes("シフト確認")) {
+      const targetDate = getJstDateOffset(1);
+      const message = buildShiftMessageForEmployee(db, targetDate, employee);
+      await sendLineReply(event.replyToken, message, { withQuickReply: true });
+      continue;
+    }
 
     if (text.includes("修正依頼")) {
       db.lineCorrectionRequests = db.lineCorrectionRequests || [];
@@ -843,7 +849,7 @@ function getAttendanceQuickReplyItems() {
     },
     {
       type: "action",
-      action: { type: "message", label: "休憩開始", text: "休憩開始" },
+      action: { type: "message", label: "明日シフト", text: "明日シフト確認" },
     },
     {
       type: "action",
@@ -919,6 +925,18 @@ async function sendLinePush(to, text) {
   } catch (_e) {
     return false;
   }
+}
+
+function buildShiftMessageForEmployee(db, targetDate, employeeName) {
+  const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
+  const userPlans = plans.filter((p) => p.date === targetDate && p.employee === employeeName);
+  if (userPlans.length === 0) {
+    return `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\nシフトは未登録です。管理者に確認してください。`;
+  }
+  return (
+    `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\n` +
+    userPlans.map((p, i) => `${i + 1}. ${p.start}-${p.end} / ${p.route}`).join("\n")
+  );
 }
 
 function getJstDateOffset(offsetDays = 0) {
@@ -998,15 +1016,9 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
 async function deliverShiftToEmployee(targetDate, employeeName) {
   const db = readDb();
   const userMap = db.userMap || {};
-  const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
   const targetUserId = Object.keys(userMap).find((uid) => (userMap[uid]?.employeeName || userMap[uid]?.employee || "") === employeeName);
   if (!targetUserId) return { targetDate, employee: employeeName, sentCount: 0, skippedCount: 1 };
-
-  const userPlans = plans.filter((p) => p.date === targetDate && p.employee === employeeName);
-  const message =
-    userPlans.length > 0
-      ? `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\n` + userPlans.map((p, i) => `${i + 1}. ${p.start}-${p.end} / ${p.route}`).join("\n")
-      : `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\nシフトは未登録です。管理者に確認してください。`;
+  const message = buildShiftMessageForEmployee(db, targetDate, employeeName);
   const ok = await sendLinePush(targetUserId, message);
   return { targetDate, employee: employeeName, sentCount: ok ? 1 : 0, skippedCount: ok ? 0 : 1 };
 }
