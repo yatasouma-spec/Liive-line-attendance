@@ -65,6 +65,11 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       };
       const flow = db.lineWorkflows?.[userId];
       if (flow?.type === "checkin" && flow.stage === "need_location") {
+        if (!isGeofenceConfigured(profile)) {
+          writeDb(db);
+          await sendLineReply(event.replyToken, "この社員の拠点（GPS）が未設定です。管理画面のLINEユーザー紐付けで拠点を設定してください。");
+          continue;
+        }
         const inside = isInsideGeofence(profile, { lat, lng });
         if (!inside) {
           writeDb(db);
@@ -574,10 +579,14 @@ function isInsideGeofence(profile, gps) {
   const lat = Number(profile?.geoLat);
   const lng = Number(profile?.geoLng);
   const radiusM = Number(profile?.geoRadiusM || 300);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return true;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
   if (!gps || !Number.isFinite(Number(gps.lat)) || !Number.isFinite(Number(gps.lng))) return false;
   const distance = haversineMeters(lat, lng, Number(gps.lat), Number(gps.lng));
   return distance <= radiusM;
+}
+
+function isGeofenceConfigured(profile) {
+  return Number.isFinite(Number(profile?.geoLat)) && Number.isFinite(Number(profile?.geoLng));
 }
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -655,6 +664,13 @@ function advanceCheckinFlow(db, userId, text, profile) {
   }
 
   if (flow.stage === "need_location") {
+    if (!isGeofenceConfigured(profile)) {
+      return {
+        message: "この社員の拠点（GPS）が未設定です。管理画面のLINEユーザー紐付けで拠点を設定してください。",
+        withQuickReply: true,
+        finalize: false,
+      };
+    }
     const gps = getLatestLocation(db, userId);
     if (!gps) {
       return {
