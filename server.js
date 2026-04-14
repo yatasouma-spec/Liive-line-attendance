@@ -342,13 +342,15 @@ app.get("/api/line/users", (_req, res) => {
     geoLat: mergedUserMap[userId]?.geoLat ?? null,
     geoLng: mergedUserMap[userId]?.geoLng ?? null,
     geoRadiusM: mergedUserMap[userId]?.geoRadiusM ?? 300,
+    geoPlaceName: mergedUserMap[userId]?.geoPlaceName || "",
+    geoMapUrl: mergedUserMap[userId]?.geoMapUrl || "",
   }));
   users.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
   res.json({ ok: true, users });
 });
 
 app.post("/api/line/users/map", (req, res) => {
-  const { userId, employeeId, employeeName, site, geoLat, geoLng, geoRadiusM } = req.body || {};
+  const { userId, employeeId, employeeName, site, geoLat, geoLng, geoRadiusM, geoPlaceName, geoMapUrl } = req.body || {};
   if (!userId || !employeeName || !site) {
     return res.status(400).json({ ok: false, error: "userId/employeeName/site are required" });
   }
@@ -361,6 +363,8 @@ app.post("/api/line/users/map", (req, res) => {
     geoLat: Number.isFinite(Number(geoLat)) ? Number(geoLat) : null,
     geoLng: Number.isFinite(Number(geoLng)) ? Number(geoLng) : null,
     geoRadiusM: Number.isFinite(Number(geoRadiusM)) && Number(geoRadiusM) > 0 ? Number(geoRadiusM) : 300,
+    geoPlaceName: String(geoPlaceName || ""),
+    geoMapUrl: String(geoMapUrl || ""),
   };
   backfillPlaceholderEmployee(db, userId, employeeName);
   registerSeenLineUser(db, userId, "");
