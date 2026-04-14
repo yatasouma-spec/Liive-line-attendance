@@ -349,13 +349,43 @@ app.get("/api/line/users", (_req, res) => {
     geoRadiusM: mergedUserMap[userId]?.geoRadiusM ?? 300,
     geoPlaceName: mergedUserMap[userId]?.geoPlaceName || "",
     geoMapUrl: mergedUserMap[userId]?.geoMapUrl || "",
+    startGeoLat: mergedUserMap[userId]?.startGeoLat ?? mergedUserMap[userId]?.geoLat ?? null,
+    startGeoLng: mergedUserMap[userId]?.startGeoLng ?? mergedUserMap[userId]?.geoLng ?? null,
+    startGeoRadiusM: mergedUserMap[userId]?.startGeoRadiusM ?? mergedUserMap[userId]?.geoRadiusM ?? 300,
+    startGeoPlaceName: mergedUserMap[userId]?.startGeoPlaceName || mergedUserMap[userId]?.geoPlaceName || "",
+    startGeoMapUrl: mergedUserMap[userId]?.startGeoMapUrl || mergedUserMap[userId]?.geoMapUrl || "",
+    endGeoLat: mergedUserMap[userId]?.endGeoLat ?? null,
+    endGeoLng: mergedUserMap[userId]?.endGeoLng ?? null,
+    endGeoRadiusM: mergedUserMap[userId]?.endGeoRadiusM ?? 300,
+    endGeoPlaceName: mergedUserMap[userId]?.endGeoPlaceName || "",
+    endGeoMapUrl: mergedUserMap[userId]?.endGeoMapUrl || "",
   }));
   users.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
   res.json({ ok: true, users });
 });
 
 app.post("/api/line/users/map", (req, res) => {
-  const { userId, employeeId, employeeName, site, geoLat, geoLng, geoRadiusM, geoPlaceName, geoMapUrl } = req.body || {};
+  const {
+    userId,
+    employeeId,
+    employeeName,
+    site,
+    geoLat,
+    geoLng,
+    geoRadiusM,
+    geoPlaceName,
+    geoMapUrl,
+    startGeoLat,
+    startGeoLng,
+    startGeoRadiusM,
+    startGeoPlaceName,
+    startGeoMapUrl,
+    endGeoLat,
+    endGeoLng,
+    endGeoRadiusM,
+    endGeoPlaceName,
+    endGeoMapUrl,
+  } = req.body || {};
   if (!userId || !employeeName || !site) {
     return res.status(400).json({ ok: false, error: "userId/employeeName/site are required" });
   }
@@ -365,11 +395,33 @@ app.post("/api/line/users/map", (req, res) => {
     employeeId: employeeId || "",
     employeeName,
     site,
-    geoLat: Number.isFinite(Number(geoLat)) ? Number(geoLat) : null,
-    geoLng: Number.isFinite(Number(geoLng)) ? Number(geoLng) : null,
-    geoRadiusM: Number.isFinite(Number(geoRadiusM)) && Number(geoRadiusM) > 0 ? Number(geoRadiusM) : 300,
-    geoPlaceName: String(geoPlaceName || ""),
-    geoMapUrl: String(geoMapUrl || ""),
+    geoLat: Number.isFinite(Number(startGeoLat)) ? Number(startGeoLat) : Number.isFinite(Number(geoLat)) ? Number(geoLat) : null,
+    geoLng: Number.isFinite(Number(startGeoLng)) ? Number(startGeoLng) : Number.isFinite(Number(geoLng)) ? Number(geoLng) : null,
+    geoRadiusM:
+      Number.isFinite(Number(startGeoRadiusM)) && Number(startGeoRadiusM) > 0
+        ? Number(startGeoRadiusM)
+        : Number.isFinite(Number(geoRadiusM)) && Number(geoRadiusM) > 0
+          ? Number(geoRadiusM)
+          : 300,
+    geoPlaceName: String(startGeoPlaceName || geoPlaceName || ""),
+    geoMapUrl: String(startGeoMapUrl || geoMapUrl || ""),
+    startGeoLat:
+      Number.isFinite(Number(startGeoLat)) ? Number(startGeoLat) : Number.isFinite(Number(geoLat)) ? Number(geoLat) : null,
+    startGeoLng:
+      Number.isFinite(Number(startGeoLng)) ? Number(startGeoLng) : Number.isFinite(Number(geoLng)) ? Number(geoLng) : null,
+    startGeoRadiusM:
+      Number.isFinite(Number(startGeoRadiusM)) && Number(startGeoRadiusM) > 0
+        ? Number(startGeoRadiusM)
+        : Number.isFinite(Number(geoRadiusM)) && Number(geoRadiusM) > 0
+          ? Number(geoRadiusM)
+          : 300,
+    startGeoPlaceName: String(startGeoPlaceName || geoPlaceName || ""),
+    startGeoMapUrl: String(startGeoMapUrl || geoMapUrl || ""),
+    endGeoLat: Number.isFinite(Number(endGeoLat)) ? Number(endGeoLat) : null,
+    endGeoLng: Number.isFinite(Number(endGeoLng)) ? Number(endGeoLng) : null,
+    endGeoRadiusM: Number.isFinite(Number(endGeoRadiusM)) && Number(endGeoRadiusM) > 0 ? Number(endGeoRadiusM) : 300,
+    endGeoPlaceName: String(endGeoPlaceName || ""),
+    endGeoMapUrl: String(endGeoMapUrl || ""),
   };
   backfillPlaceholderEmployee(db, userId, employeeName);
   registerSeenLineUser(db, userId, "");
@@ -575,18 +627,32 @@ function getLatestLocation(db, userId) {
   return { lat: Number(row.lat), lng: Number(row.lng), at: row.at || null };
 }
 
-function isInsideGeofence(profile, gps) {
-  const lat = Number(profile?.geoLat);
-  const lng = Number(profile?.geoLng);
-  const radiusM = Number(profile?.geoRadiusM || 300);
+function getActionGeofence(profile, action = "checkin") {
+  if (action === "checkout") {
+    return {
+      lat: Number(profile?.endGeoLat),
+      lng: Number(profile?.endGeoLng),
+      radiusM: Number(profile?.endGeoRadiusM || 300),
+    };
+  }
+  return {
+    lat: Number(profile?.startGeoLat ?? profile?.geoLat),
+    lng: Number(profile?.startGeoLng ?? profile?.geoLng),
+    radiusM: Number(profile?.startGeoRadiusM ?? profile?.geoRadiusM ?? 300),
+  };
+}
+
+function isInsideGeofence(profile, gps, action = "checkin") {
+  const { lat, lng, radiusM } = getActionGeofence(profile, action);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
   if (!gps || !Number.isFinite(Number(gps.lat)) || !Number.isFinite(Number(gps.lng))) return false;
   const distance = haversineMeters(lat, lng, Number(gps.lat), Number(gps.lng));
   return distance <= radiusM;
 }
 
-function isGeofenceConfigured(profile) {
-  return Number.isFinite(Number(profile?.geoLat)) && Number.isFinite(Number(profile?.geoLng));
+function isGeofenceConfigured(profile, action = "checkin") {
+  const { lat, lng } = getActionGeofence(profile, action);
+  return Number.isFinite(lat) && Number.isFinite(lng);
 }
 
 function haversineMeters(lat1, lon1, lat2, lon2) {

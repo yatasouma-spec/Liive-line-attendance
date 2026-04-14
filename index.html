@@ -440,20 +440,29 @@
         <section class="view" data-view="lineusers">
           <section class="panel">
             <h2>LINEユーザー紐付け（1分設定）</h2>
-            <p class="section-lead">社員がLINEで1回送信すると、ここに候補表示されます。社員・ルートを選んで保存してください。</p>
+            <p class="section-lead">社員がLINEで1回送信すると、ここに候補表示されます。社員を選び、開始地点→退勤地点の順に登録してください。</p>
             <form id="lineMapForm" class="shift-form">
               <input id="lineUserIdInput" type="text" placeholder="LINE userId (Uから始まる文字列)" required />
               <select id="lineMapEmployee" required></select>
-              <select id="lineMapRoute" required></select>
-              <input id="lineMapGeoMapUrl" type="text" placeholder="拠点のGoogleマップURLを貼り付け（任意）" />
+              <input id="lineMapSiteName" type="text" placeholder="担当現場名（例: 本社回収ルートA）" required />
+              <p id="lineMapStepHint" class="section-lead">1/2 開始地点のGoogleマップURLを入力してください</p>
+              <input id="lineMapStartGeoMapUrl" type="text" placeholder="開始地点のGoogleマップURL" />
               <div class="toolbar-actions">
-                <button type="button" class="btn btn-ghost" id="lineMapUseMapUrlBtn">URLから位置設定</button>
-                <button type="button" class="btn btn-ghost" id="lineMapUseCurrentGpsBtn">現在地を設定</button>
+                <button type="button" class="btn btn-ghost" id="lineMapUseStartMapUrlBtn">開始地点をURLから設定</button>
               </div>
-              <input id="lineMapGeoPlaceName" type="text" placeholder="拠点名（URLから自動表示）" readonly />
-              <input id="lineMapGeoRadius" type="number" min="50" step="10" placeholder="許容半径m（例: 300）" />
-              <input id="lineMapGeoLat" type="hidden" />
-              <input id="lineMapGeoLng" type="hidden" />
+              <input id="lineMapStartGeoPlaceName" type="text" placeholder="開始地点名（URLから自動表示）" readonly />
+              <input id="lineMapStartGeoRadius" type="number" min="50" step="10" placeholder="開始地点の許容半径m（例: 300）" value="300" />
+              <input id="lineMapStartGeoLat" type="hidden" />
+              <input id="lineMapStartGeoLng" type="hidden" />
+
+              <input id="lineMapEndGeoMapUrl" type="text" placeholder="退勤地点のGoogleマップURL" />
+              <div class="toolbar-actions">
+                <button type="button" class="btn btn-ghost" id="lineMapUseEndMapUrlBtn">退勤地点をURLから設定</button>
+              </div>
+              <input id="lineMapEndGeoPlaceName" type="text" placeholder="退勤地点名（URLから自動表示）" readonly />
+              <input id="lineMapEndGeoRadius" type="number" min="50" step="10" placeholder="退勤地点の許容半径m（例: 300）" value="300" />
+              <input id="lineMapEndGeoLat" type="hidden" />
+              <input id="lineMapEndGeoLng" type="hidden" />
               <button type="submit" class="btn">紐付け保存</button>
             </form>
             <div class="table-wrap">
@@ -464,8 +473,9 @@
                     <th>最終受信</th>
                     <th>最終メッセージ</th>
                     <th>紐付け社員</th>
-                    <th>ルート</th>
-                    <th>位置</th>
+                    <th>担当現場</th>
+                    <th>開始地点</th>
+                    <th>退勤地点</th>
                     <th>操作</th>
                   </tr>
                 </thead>

@@ -309,10 +309,30 @@ function formatRouteGeo(route) {
 }
 
 function formatGeoCell(row) {
-  const placeName = normalizeText(row?.geoPlaceName || "");
+  const placeName = normalizeText(row?.geoPlaceName || row?.startGeoPlaceName || "");
   const lat = Number(row?.geoLat);
   const lng = Number(row?.geoLng);
   const radius = Number(row?.geoRadiusM || 300);
+  if (placeName) return `${placeName} / 半径${radius}m`;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / 半径${radius}m`;
+}
+
+function formatStartGeoCell(row) {
+  const placeName = normalizeText(row?.startGeoPlaceName || row?.geoPlaceName || "");
+  const lat = Number(row?.startGeoLat ?? row?.geoLat);
+  const lng = Number(row?.startGeoLng ?? row?.geoLng);
+  const radius = Number(row?.startGeoRadiusM ?? row?.geoRadiusM ?? 300);
+  if (placeName) return `${placeName} / 半径${radius}m`;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / 半径${radius}m`;
+}
+
+function formatEndGeoCell(row) {
+  const placeName = normalizeText(row?.endGeoPlaceName || "");
+  const lat = Number(row?.endGeoLat);
+  const lng = Number(row?.endGeoLng);
+  const radius = Number(row?.endGeoRadiusM || 300);
   if (placeName) return `${placeName} / 半径${radius}m`;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
   return `${lat.toFixed(5)}, ${lng.toFixed(5)} / 半径${radius}m`;
@@ -624,13 +644,19 @@ function populateSelectors() {
     if (prev && [...lineMapEmployee.options].some((o) => o.value === prev)) lineMapEmployee.value = prev;
   }
 
-  ["lineSite", "shiftRoute", "lineMapRoute"].forEach((id) => {
+  ["lineSite", "shiftRoute"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
     el.innerHTML = routeOptions;
     if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
   });
+
+  const lineMapSiteName = document.getElementById("lineMapSiteName");
+  if (lineMapSiteName && !lineMapSiteName.value && routeOptions) {
+    const firstRoute = activeRoutes()[0];
+    if (firstRoute?.name) lineMapSiteName.value = firstRoute.name;
+  }
 }
 
 function renderDashboard() {
@@ -1119,15 +1145,16 @@ function renderMasters() {
       <td>${u.lastText || "-"}</td>
       <td>${u.employee || "-"}</td>
       <td>${u.site || "-"}</td>
-      <td>${formatGeoCell(u)}</td>
+      <td>${formatStartGeoCell(u)}</td>
+      <td>${formatEndGeoCell(u)}</td>
       <td>
-        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}" data-fill-geo-place-name="${u.geoPlaceName || ""}" data-fill-geo-map-url="${u.geoMapUrl || ""}" data-fill-geo-lat="${u.geoLat ?? ""}" data-fill-geo-lng="${u.geoLng ?? ""}" data-fill-geo-radius="${u.geoRadiusM ?? ""}">このIDを入力</button>
+        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}" data-fill-start-geo-place-name="${u.startGeoPlaceName || u.geoPlaceName || ""}" data-fill-start-geo-map-url="${u.startGeoMapUrl || u.geoMapUrl || ""}" data-fill-start-geo-lat="${u.startGeoLat ?? u.geoLat ?? ""}" data-fill-start-geo-lng="${u.startGeoLng ?? u.geoLng ?? ""}" data-fill-start-geo-radius="${u.startGeoRadiusM ?? u.geoRadiusM ?? ""}" data-fill-end-geo-place-name="${u.endGeoPlaceName || ""}" data-fill-end-geo-map-url="${u.endGeoMapUrl || ""}" data-fill-end-geo-lat="${u.endGeoLat ?? ""}" data-fill-end-geo-lng="${u.endGeoLng ?? ""}" data-fill-end-geo-radius="${u.endGeoRadiusM ?? ""}">このIDを入力</button>
         <button class="btn btn-ghost" data-unmap-line-user="${u.userId}">紐付け解除</button>
       </td>
     </tr>`
           )
           .join("")
-      : '<tr><td class="empty" colspan="7">まだLINE送信履歴がありません</td></tr>';
+      : '<tr><td class="empty" colspan="8">まだLINE送信履歴がありません</td></tr>';
   }
 }
 
@@ -1608,6 +1635,16 @@ async function saveLineUserMapping(userId, employeeId, employeeName, site, geo =
           geoRadiusM: geo.geoRadiusM,
           geoPlaceName: geo.geoPlaceName || "",
           geoMapUrl: geo.geoMapUrl || "",
+          startGeoLat: geo.startGeoLat,
+          startGeoLng: geo.startGeoLng,
+          startGeoRadiusM: geo.startGeoRadiusM,
+          startGeoPlaceName: geo.startGeoPlaceName || "",
+          startGeoMapUrl: geo.startGeoMapUrl || "",
+          endGeoLat: geo.endGeoLat,
+          endGeoLng: geo.endGeoLng,
+          endGeoRadiusM: geo.endGeoRadiusM,
+          endGeoPlaceName: geo.endGeoPlaceName || "",
+          endGeoMapUrl: geo.endGeoMapUrl || "",
         }),
       });
     if (!data?.ok) throw new Error("save failed");
@@ -2049,25 +2086,49 @@ function bindMasterEvents() {
     e.preventDefault();
     const userId = document.getElementById("lineUserIdInput")?.value.trim();
     const employeeId = document.getElementById("lineMapEmployee")?.value;
-    const site = document.getElementById("lineMapRoute")?.value;
-    const mapUrl = normalizeText(document.getElementById("lineMapGeoMapUrl")?.value || "");
-    const placeName = normalizeText(document.getElementById("lineMapGeoPlaceName")?.value || "");
-    const geoLat = Number(document.getElementById("lineMapGeoLat")?.value || NaN);
-    const geoLng = Number(document.getElementById("lineMapGeoLng")?.value || NaN);
-    const geoRadiusM = Number(document.getElementById("lineMapGeoRadius")?.value || 300);
+    const site = normalizeText(document.getElementById("lineMapSiteName")?.value || "");
+    const startMapUrl = normalizeText(document.getElementById("lineMapStartGeoMapUrl")?.value || "");
+    const startPlaceName = normalizeText(document.getElementById("lineMapStartGeoPlaceName")?.value || "");
+    const startGeoLat = Number(document.getElementById("lineMapStartGeoLat")?.value || NaN);
+    const startGeoLng = Number(document.getElementById("lineMapStartGeoLng")?.value || NaN);
+    const startGeoRadiusM = Number(document.getElementById("lineMapStartGeoRadius")?.value || 300);
+    const endMapUrl = normalizeText(document.getElementById("lineMapEndGeoMapUrl")?.value || "");
+    const endPlaceName = normalizeText(document.getElementById("lineMapEndGeoPlaceName")?.value || "");
+    const endGeoLat = Number(document.getElementById("lineMapEndGeoLat")?.value || NaN);
+    const endGeoLng = Number(document.getElementById("lineMapEndGeoLng")?.value || NaN);
+    const endGeoRadiusM = Number(document.getElementById("lineMapEndGeoRadius")?.value || 300);
     const employee = state.employees.find((x) => x.id === employeeId);
     if (!userId || !employeeId || !site || !employee) return;
-    const route = state.routes.find((r) => r.name === site);
-    const finalGeoLat = Number.isFinite(geoLat) ? geoLat : Number(route?.geoLat);
-    const finalGeoLng = Number.isFinite(geoLng) ? geoLng : Number(route?.geoLng);
-    const finalGeoRadius = Number.isFinite(geoRadiusM) && geoRadiusM > 0 ? geoRadiusM : Number(route?.geoRadiusM || 300);
+    if (!Number.isFinite(startGeoLat) || !Number.isFinite(startGeoLng)) {
+      alert("開始地点のURLを入力して「開始地点をURLから設定」を押してください。");
+      return;
+    }
+    const stepHint = document.getElementById("lineMapStepHint");
+    if ((!endMapUrl || !Number.isFinite(endGeoLat) || !Number.isFinite(endGeoLng)) && stepHint) {
+      stepHint.textContent = "2/2 退勤地点のGoogleマップURLを入力してください（同じ場所なら同じURLで可）";
+      stepHint.style.color = "var(--warn)";
+    }
     await saveLineUserMapping(userId, employeeId, employee.name, site, {
-      geoLat: Number.isFinite(finalGeoLat) ? finalGeoLat : null,
-      geoLng: Number.isFinite(finalGeoLng) ? finalGeoLng : null,
-      geoRadiusM: Number.isFinite(finalGeoRadius) && finalGeoRadius > 0 ? finalGeoRadius : 300,
-      geoPlaceName: placeName || normalizeText(route?.geoPlaceName || site),
-      geoMapUrl: mapUrl || normalizeText(route?.geoMapUrl || ""),
+      geoLat: startGeoLat,
+      geoLng: startGeoLng,
+      geoRadiusM: Number.isFinite(startGeoRadiusM) && startGeoRadiusM > 0 ? startGeoRadiusM : 300,
+      geoPlaceName: startPlaceName || site,
+      geoMapUrl: startMapUrl || "",
+      startGeoLat,
+      startGeoLng,
+      startGeoRadiusM: Number.isFinite(startGeoRadiusM) && startGeoRadiusM > 0 ? startGeoRadiusM : 300,
+      startGeoPlaceName: startPlaceName || site,
+      startGeoMapUrl: startMapUrl || "",
+      endGeoLat: Number.isFinite(endGeoLat) ? endGeoLat : null,
+      endGeoLng: Number.isFinite(endGeoLng) ? endGeoLng : null,
+      endGeoRadiusM: Number.isFinite(endGeoRadiusM) && endGeoRadiusM > 0 ? endGeoRadiusM : 300,
+      endGeoPlaceName: endPlaceName || "",
+      endGeoMapUrl: endMapUrl || "",
     });
+    if (stepHint) {
+      stepHint.textContent = "1/2 開始地点のGoogleマップURLを入力してください";
+      stepHint.style.color = "";
+    }
   });
 
   document.getElementById("lineUsersBody")?.addEventListener("click", (e) => {
@@ -2085,26 +2146,41 @@ function bindMasterEvents() {
     const input = document.getElementById("lineUserIdInput");
     if (input) input.value = userId;
     const empSelect = document.getElementById("lineMapEmployee");
-    const siteSelect = document.getElementById("lineMapRoute");
-    const mapUrlInput = document.getElementById("lineMapGeoMapUrl");
-    const placeInput = document.getElementById("lineMapGeoPlaceName");
-    const latInput = document.getElementById("lineMapGeoLat");
-    const lngInput = document.getElementById("lineMapGeoLng");
-    const radiusInput = document.getElementById("lineMapGeoRadius");
+    const siteInput = document.getElementById("lineMapSiteName");
+    const startMapUrlInput = document.getElementById("lineMapStartGeoMapUrl");
+    const startPlaceInput = document.getElementById("lineMapStartGeoPlaceName");
+    const startLatInput = document.getElementById("lineMapStartGeoLat");
+    const startLngInput = document.getElementById("lineMapStartGeoLng");
+    const startRadiusInput = document.getElementById("lineMapStartGeoRadius");
+    const endMapUrlInput = document.getElementById("lineMapEndGeoMapUrl");
+    const endPlaceInput = document.getElementById("lineMapEndGeoPlaceName");
+    const endLatInput = document.getElementById("lineMapEndGeoLat");
+    const endLngInput = document.getElementById("lineMapEndGeoLng");
+    const endRadiusInput = document.getElementById("lineMapEndGeoRadius");
     const empId = target.getAttribute("data-fill-emp-id");
     const site = target.getAttribute("data-fill-site");
-    const geoPlaceName = target.getAttribute("data-fill-geo-place-name");
-    const geoMapUrl = target.getAttribute("data-fill-geo-map-url");
-    const geoLat = target.getAttribute("data-fill-geo-lat");
-    const geoLng = target.getAttribute("data-fill-geo-lng");
-    const geoRadius = target.getAttribute("data-fill-geo-radius");
+    const startGeoPlaceName = target.getAttribute("data-fill-start-geo-place-name");
+    const startGeoMapUrl = target.getAttribute("data-fill-start-geo-map-url");
+    const startGeoLat = target.getAttribute("data-fill-start-geo-lat");
+    const startGeoLng = target.getAttribute("data-fill-start-geo-lng");
+    const startGeoRadius = target.getAttribute("data-fill-start-geo-radius");
+    const endGeoPlaceName = target.getAttribute("data-fill-end-geo-place-name");
+    const endGeoMapUrl = target.getAttribute("data-fill-end-geo-map-url");
+    const endGeoLat = target.getAttribute("data-fill-end-geo-lat");
+    const endGeoLng = target.getAttribute("data-fill-end-geo-lng");
+    const endGeoRadius = target.getAttribute("data-fill-end-geo-radius");
     if (empSelect && empId) empSelect.value = empId;
-    if (siteSelect && site) siteSelect.value = site;
-    if (mapUrlInput && geoMapUrl) mapUrlInput.value = geoMapUrl;
-    if (placeInput && geoPlaceName) placeInput.value = geoPlaceName;
-    if (latInput && geoLat) latInput.value = geoLat;
-    if (lngInput && geoLng) lngInput.value = geoLng;
-    if (radiusInput && geoRadius) radiusInput.value = geoRadius;
+    if (siteInput && site) siteInput.value = site;
+    if (startMapUrlInput && startGeoMapUrl) startMapUrlInput.value = startGeoMapUrl;
+    if (startPlaceInput && startGeoPlaceName) startPlaceInput.value = startGeoPlaceName;
+    if (startLatInput && startGeoLat) startLatInput.value = startGeoLat;
+    if (startLngInput && startGeoLng) startLngInput.value = startGeoLng;
+    if (startRadiusInput && startGeoRadius) startRadiusInput.value = startGeoRadius;
+    if (endMapUrlInput && endGeoMapUrl) endMapUrlInput.value = endGeoMapUrl;
+    if (endPlaceInput && endGeoPlaceName) endPlaceInput.value = endGeoPlaceName;
+    if (endLatInput && endGeoLat) endLatInput.value = endGeoLat;
+    if (endLngInput && endGeoLng) endLngInput.value = endGeoLng;
+    if (endRadiusInput && endGeoRadius) endRadiusInput.value = endGeoRadius;
   });
 
   document.getElementById("leaveRequestBody")?.addEventListener("click", (e) => {
@@ -2253,20 +2329,21 @@ function bindEvents() {
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);
   document.getElementById("routeUseMapUrlBtn")?.addEventListener("click", () => fillGeoFromMapUrl("route"));
   document.getElementById("routeUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("route"));
-  document.getElementById("lineMapUseMapUrlBtn")?.addEventListener("click", () => fillGeoFromMapUrl("lineMap"));
-  document.getElementById("lineMapUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("lineMap"));
-  document.getElementById("lineMapRoute")?.addEventListener("change", (e) => {
-    const selectedRoute = normalizeText(e.target?.value || "");
-    const route = state.routes.find((r) => r.name === selectedRoute);
-    if (!route) return;
-    const lat = Number(route.geoLat);
-    const lng = Number(route.geoLng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-    const placeName = normalizeText(route.geoPlaceName || route.name);
-    const mapUrl = normalizeText(route.geoMapUrl || "");
-    setGeoInputs("lineMap", lat, lng, placeName, mapUrl);
-    const radiusInput = document.getElementById("lineMapGeoRadius");
-    if (radiusInput) radiusInput.value = Number(route.geoRadiusM || 300);
+  document.getElementById("lineMapUseStartMapUrlBtn")?.addEventListener("click", () => {
+    fillGeoFromMapUrl("lineMapStart");
+    const stepHint = document.getElementById("lineMapStepHint");
+    if (stepHint) {
+      stepHint.textContent = "2/2 退勤地点のGoogleマップURLを入力してください（同じ場所なら同じURLで可）";
+      stepHint.style.color = "var(--warn)";
+    }
+  });
+  document.getElementById("lineMapUseEndMapUrlBtn")?.addEventListener("click", () => {
+    fillGeoFromMapUrl("lineMapEnd");
+    const stepHint = document.getElementById("lineMapStepHint");
+    if (stepHint) {
+      stepHint.textContent = "設定完了: 保存ボタンで紐付けを確定してください";
+      stepHint.style.color = "var(--ok)";
+    }
   });
 
   document.getElementById("lineCheckInBtn")?.addEventListener("click", () => lineAction("checkin"));
