@@ -471,6 +471,94 @@ button {
   gap: 8px;
 }
 
+.line-map-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.line-map-form-single {
+  grid-template-columns: 1fr;
+  max-width: 760px;
+}
+
+.line-map-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.line-map-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.line-map-card-basic {
+  background: color-mix(in srgb, var(--surface-soft) 35%, #fff 65%);
+}
+
+.line-map-card-start {
+  border-left: 4px solid #2e7df6;
+}
+
+.line-map-card-end {
+  border-left: 4px solid #22a06b;
+}
+
+.line-map-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.line-map-label {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--sub);
+}
+
+.line-map-help {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f5f8fc;
+  color: #334155;
+  font-size: 0.88rem;
+}
+
+.line-map-status {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  width: fit-content;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.line-map-status.neutral {
+  background: #eef2f7;
+  color: #445;
+}
+
+.line-map-status.ok {
+  background: #e7f8ef;
+  color: #0f7a4a;
+}
+
+.line-map-status.warn {
+  background: #fff1e8;
+  color: #b34a00;
+}
+
+.line-map-submit {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
 input,
 select,
 textarea {
@@ -709,7 +797,8 @@ tbody tr:hover td {
   .punch-form,
   .big-button-grid,
   .master-form,
-  .shift-form {
+  .shift-form,
+  .line-map-form {
     grid-template-columns: 1fr;
   }
 

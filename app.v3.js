@@ -210,10 +210,13 @@ function setGeoInputs(prefix, lat, lng, placeName = "", mapUrl = "") {
   const latInput = document.getElementById(`${prefix}GeoLat`);
   const lngInput = document.getElementById(`${prefix}GeoLng`);
   const placeInput = document.getElementById(`${prefix}GeoPlaceName`);
+  const placePreview = document.getElementById(`${prefix}GeoPlacePreview`);
   const mapInput = document.getElementById(`${prefix}GeoMapUrl`);
+  const resolvedPlace = normalizeText(placeName) || `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
   if (latInput) latInput.value = Number(lat).toFixed(6);
   if (lngInput) lngInput.value = Number(lng).toFixed(6);
-  if (placeInput) placeInput.value = normalizeText(placeName) || `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
+  if (placeInput) placeInput.value = resolvedPlace;
+  if (placePreview) placePreview.textContent = resolvedPlace;
   if (mapInput && mapUrl) mapInput.value = mapUrl;
 }
 
@@ -234,6 +237,44 @@ function fillGeoFromCurrentGps(prefix) {
     return;
   }
   setGeoInputs(prefix, state.currentGps.lat, state.currentGps.lng, "現在地（端末取得）");
+}
+
+function setStatusBadge(id, klass, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = `line-map-status ${klass}`;
+  el.textContent = text;
+}
+
+function markLineMapSaveStatus(klass, text) {
+  setStatusBadge("lineMapSaveStatus", klass, text);
+}
+
+function updateLineMapProgress() {
+  const startLat = Number(document.getElementById("lineMapStartGeoLat")?.value || NaN);
+  const startLng = Number(document.getElementById("lineMapStartGeoLng")?.value || NaN);
+  const endLat = Number(document.getElementById("lineMapEndGeoLat")?.value || NaN);
+  const endLng = Number(document.getElementById("lineMapEndGeoLng")?.value || NaN);
+
+  if (Number.isFinite(startLat) && Number.isFinite(startLng)) {
+    setStatusBadge("lineMapStartStatus", "ok", "設定済み");
+  } else {
+    setStatusBadge("lineMapStartStatus", "neutral", "未設定");
+  }
+
+  if (Number.isFinite(endLat) && Number.isFinite(endLng)) {
+    setStatusBadge("lineMapEndStatus", "ok", "設定済み");
+  } else {
+    setStatusBadge("lineMapEndStatus", "warn", "未設定（同じ地点なら開始地点URLを貼付）");
+  }
+}
+
+function syncLineMapPlacePreview(prefix) {
+  const placeInput = document.getElementById(`${prefix}GeoPlaceName`);
+  const placePreview = document.getElementById(`${prefix}GeoPlacePreview`);
+  if (!placePreview) return;
+  const text = normalizeText(placeInput?.value || "");
+  placePreview.textContent = text || "未設定";
 }
 
 function reconcileLineDisplayNames() {
@@ -1141,12 +1182,11 @@ function renderMasters() {
           .map(
             (u) => `<tr>
       <td>${u.userId}</td>
-      <td>${u.lastSeenAt || "-"}</td>
-      <td>${u.lastText || "-"}</td>
       <td>${u.employee || "-"}</td>
       <td>${u.site || "-"}</td>
       <td>${formatStartGeoCell(u)}</td>
       <td>${formatEndGeoCell(u)}</td>
+      <td>${u.startGeoLat || u.geoLat ? (u.endGeoLat ? '<span class="badge ok">開始/退勤 設定済み</span>' : '<span class="badge warn">開始のみ設定</span>') : '<span class="badge warn">未設定</span>'}</td>
       <td>
         <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}" data-fill-start-geo-place-name="${u.startGeoPlaceName || u.geoPlaceName || ""}" data-fill-start-geo-map-url="${u.startGeoMapUrl || u.geoMapUrl || ""}" data-fill-start-geo-lat="${u.startGeoLat ?? u.geoLat ?? ""}" data-fill-start-geo-lng="${u.startGeoLng ?? u.geoLng ?? ""}" data-fill-start-geo-radius="${u.startGeoRadiusM ?? u.geoRadiusM ?? ""}" data-fill-end-geo-place-name="${u.endGeoPlaceName || ""}" data-fill-end-geo-map-url="${u.endGeoMapUrl || ""}" data-fill-end-geo-lat="${u.endGeoLat ?? ""}" data-fill-end-geo-lng="${u.endGeoLng ?? ""}" data-fill-end-geo-radius="${u.endGeoRadiusM ?? ""}">このIDを入力</button>
         <button class="btn btn-ghost" data-unmap-line-user="${u.userId}">紐付け解除</button>
@@ -1154,7 +1194,7 @@ function renderMasters() {
     </tr>`
           )
           .join("")
-      : '<tr><td class="empty" colspan="8">まだLINE送信履歴がありません</td></tr>';
+      : '<tr><td class="empty" colspan="7">まだLINE送信履歴がありません</td></tr>';
   }
 }
 
@@ -1168,6 +1208,9 @@ function renderAll() {
   renderMasters();
   renderMonthUnlockRequests();
   renderLeaveRequests();
+  syncLineMapPlacePreview("lineMapStart");
+  syncLineMapPlacePreview("lineMapEnd");
+  updateLineMapProgress();
   persist();
 }
 
@@ -1649,8 +1692,11 @@ async function saveLineUserMapping(userId, employeeId, employeeName, site, geo =
       });
     if (!data?.ok) throw new Error("save failed");
     await fetchLineUsers();
+    markLineMapSaveStatus("ok", "保存済み");
+    updateLineMapProgress();
     alert("LINEユーザー紐付けを保存しました");
   } catch (_e) {
+    markLineMapSaveStatus("warn", "保存失敗（再度保存してください）");
     alert("保存に失敗しました");
   }
 }
@@ -1667,6 +1713,7 @@ async function unmapLineUser(userId) {
     });
     if (!data?.ok) throw new Error("unmap failed");
     await fetchLineUsers();
+    markLineMapSaveStatus("neutral", "未保存");
     alert("LINEユーザー紐付けを解除しました");
   } catch (_e) {
     alert("紐付け解除に失敗しました");
@@ -2103,10 +2150,8 @@ function bindMasterEvents() {
       alert("開始地点のURLを入力して「開始地点をURLから設定」を押してください。");
       return;
     }
-    const stepHint = document.getElementById("lineMapStepHint");
-    if ((!endMapUrl || !Number.isFinite(endGeoLat) || !Number.isFinite(endGeoLng)) && stepHint) {
-      stepHint.textContent = "2/2 退勤地点のGoogleマップURLを入力してください（同じ場所なら同じURLで可）";
-      stepHint.style.color = "var(--warn)";
+    if (!Number.isFinite(endGeoLat) || !Number.isFinite(endGeoLng)) {
+      markLineMapSaveStatus("warn", "退勤地点が未設定です（開始地点のみで保存可）");
     }
     await saveLineUserMapping(userId, employeeId, employee.name, site, {
       geoLat: startGeoLat,
@@ -2125,10 +2170,6 @@ function bindMasterEvents() {
       endGeoPlaceName: endPlaceName || "",
       endGeoMapUrl: endMapUrl || "",
     });
-    if (stepHint) {
-      stepHint.textContent = "1/2 開始地点のGoogleマップURLを入力してください";
-      stepHint.style.color = "";
-    }
   });
 
   document.getElementById("lineUsersBody")?.addEventListener("click", (e) => {
@@ -2181,6 +2222,10 @@ function bindMasterEvents() {
     if (endLatInput && endGeoLat) endLatInput.value = endGeoLat;
     if (endLngInput && endGeoLng) endLngInput.value = endGeoLng;
     if (endRadiusInput && endGeoRadius) endRadiusInput.value = endGeoRadius;
+    syncLineMapPlacePreview("lineMapStart");
+    syncLineMapPlacePreview("lineMapEnd");
+    updateLineMapProgress();
+    markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
 
   document.getElementById("leaveRequestBody")?.addEventListener("click", (e) => {
@@ -2331,19 +2376,36 @@ function bindEvents() {
   document.getElementById("routeUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("route"));
   document.getElementById("lineMapUseStartMapUrlBtn")?.addEventListener("click", () => {
     fillGeoFromMapUrl("lineMapStart");
-    const stepHint = document.getElementById("lineMapStepHint");
-    if (stepHint) {
-      stepHint.textContent = "2/2 退勤地点のGoogleマップURLを入力してください（同じ場所なら同じURLで可）";
-      stepHint.style.color = "var(--warn)";
-    }
+    updateLineMapProgress();
+    markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
   document.getElementById("lineMapUseEndMapUrlBtn")?.addEventListener("click", () => {
     fillGeoFromMapUrl("lineMapEnd");
-    const stepHint = document.getElementById("lineMapStepHint");
-    if (stepHint) {
-      stepHint.textContent = "設定完了: 保存ボタンで紐付けを確定してください";
-      stepHint.style.color = "var(--ok)";
-    }
+    updateLineMapProgress();
+    markLineMapSaveStatus("warn", "編集中（保存してください）");
+  });
+  [
+    "lineUserIdInput",
+    "lineMapEmployee",
+    "lineMapSiteName",
+    "lineMapStartGeoMapUrl",
+    "lineMapStartGeoRadius",
+    "lineMapEndGeoMapUrl",
+    "lineMapEndGeoRadius",
+  ].forEach((id) => {
+    document.getElementById(id)?.addEventListener("input", () => {
+      updateLineMapProgress();
+      markLineMapSaveStatus("neutral", "未保存");
+    });
+    document.getElementById(id)?.addEventListener("change", () => {
+      updateLineMapProgress();
+      markLineMapSaveStatus("neutral", "未保存");
+    });
+  });
+  ["lineMapStartGeoPlaceName", "lineMapEndGeoPlaceName"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("input", () => {
+      syncLineMapPlacePreview(id.includes("Start") ? "lineMapStart" : "lineMapEnd");
+    });
   });
 
   document.getElementById("lineCheckInBtn")?.addEventListener("click", () => lineAction("checkin"));
