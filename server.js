@@ -311,6 +311,41 @@ app.get("/api/bootstrap", (_req, res) => {
   });
 });
 
+app.post("/api/maps/resolve-latlng", async (req, res) => {
+  const url = String(req.body?.url || "").trim();
+  if (!url) {
+    return res.status(400).json({ ok: false, error: "url is required" });
+  }
+  const direct = parseGoogleMapsLatLng(url);
+  if (direct) {
+    return res.json({ ok: true, lat: direct.lat, lng: direct.lng, placeName: extractPlaceNameFromMapsUrl(url), resolvedUrl: url });
+  }
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        "user-agent": "Mozilla/5.0 (Liive-Attendance)",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+    const resolvedUrl = response.url || url;
+    const parsed = parseGoogleMapsLatLng(resolvedUrl);
+    if (!parsed) {
+      return res.status(422).json({ ok: false, error: "latlng not found", resolvedUrl });
+    }
+    return res.json({
+      ok: true,
+      lat: parsed.lat,
+      lng: parsed.lng,
+      placeName: extractPlaceNameFromMapsUrl(resolvedUrl) || extractPlaceNameFromMapsUrl(url),
+      resolvedUrl,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: "resolve failed", message: String(error?.message || error) });
+  }
+});
+
 app.post("/api/line-action", (req, res) => {
   const { employee, site, action, gps, alcohol, confirm } = req.body || {};
   if (!employee || !site || !action) {
@@ -563,6 +598,50 @@ function actionLabel(action) {
   if (action === "breakStart") return "休憩開始";
   if (action === "breakEnd") return "休憩終了";
   return action;
+}
+
+function extractPlaceNameFromMapsUrl(urlText) {
+  const text = String(urlText || "").trim();
+  if (!text) return "";
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(text);
+    } catch (_e) {
+      return text;
+    }
+  })();
+  const byPath = decoded.match(/\/place\/([^/]+)/);
+  if (byPath?.[1]) return byPath[1].replace(/\+/g, " ").trim();
+  const byQuery = decoded.match(/[?&](?:q|query)=([^&]+)/);
+  if (byQuery?.[1]) return byQuery[1].replace(/\+/g, " ").trim();
+  return "";
+}
+
+function parseGoogleMapsLatLng(urlText) {
+  const text = String(urlText || "").trim();
+  if (!text) return null;
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(text);
+    } catch (_e) {
+      return text;
+    }
+  })();
+  const patterns = [
+    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /[?&]center=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+  ];
+  for (const p of patterns) {
+    const m = decoded.match(p);
+    if (!m) continue;
+    const lat = Number(m[1]);
+    const lng = Number(m[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  return null;
 }
 
 function needsConfirmAction(action) {

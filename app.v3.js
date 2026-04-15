@@ -195,6 +195,7 @@ function parseGoogleMapsLatLng(urlText) {
     /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
     /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
     /[?&]center=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
   ];
   for (const p of patterns) {
     const m = decoded.match(p);
@@ -203,6 +204,25 @@ function parseGoogleMapsLatLng(urlText) {
     const lng = Number(m[2]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
+  return null;
+}
+
+async function resolveGoogleMapsLatLng(urlText) {
+  const local = parseGoogleMapsLatLng(urlText);
+  if (local) return local;
+  if (!API_ENABLED) return null;
+  try {
+    const data = await apiRequest("/api/maps/resolve-latlng", {
+      method: "POST",
+      body: JSON.stringify({ url: normalizeText(urlText) }),
+    });
+    if (!data?.ok) return null;
+    const lat = Number(data.lat);
+    const lng = Number(data.lng);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat, lng, placeName: normalizeText(data.placeName || "") };
+    }
+  } catch (_e) {}
   return null;
 }
 
@@ -220,15 +240,16 @@ function setGeoInputs(prefix, lat, lng, placeName = "", mapUrl = "") {
   if (mapInput && mapUrl) mapInput.value = mapUrl;
 }
 
-function fillGeoFromMapUrl(prefix) {
+async function fillGeoFromMapUrl(prefix) {
   const mapUrl = document.getElementById(`${prefix}GeoMapUrl`)?.value || "";
-  const parsed = parseGoogleMapsLatLng(mapUrl);
+  const parsed = await resolveGoogleMapsLatLng(mapUrl);
   if (!parsed) {
-    alert("位置を取得できませんでした。Googleマップでピンを開いたURLを貼り付けてください。");
-    return;
+    alert("位置を取得できませんでした。Googleマップで場所を開いたURL（maps.google.com または maps.app.goo.gl）を貼り付けてください。");
+    return false;
   }
-  const placeName = extractPlaceNameFromMapsUrl(mapUrl);
+  const placeName = parsed.placeName || extractPlaceNameFromMapsUrl(mapUrl);
   setGeoInputs(prefix, parsed.lat, parsed.lng, placeName, mapUrl);
+  return true;
 }
 
 function fillGeoFromCurrentGps(prefix) {
@@ -2372,15 +2393,19 @@ function bindEvents() {
   });
 
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);
-  document.getElementById("routeUseMapUrlBtn")?.addEventListener("click", () => fillGeoFromMapUrl("route"));
+  document.getElementById("routeUseMapUrlBtn")?.addEventListener("click", async () => {
+    await fillGeoFromMapUrl("route");
+  });
   document.getElementById("routeUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("route"));
-  document.getElementById("lineMapUseStartMapUrlBtn")?.addEventListener("click", () => {
-    fillGeoFromMapUrl("lineMapStart");
+  document.getElementById("lineMapUseStartMapUrlBtn")?.addEventListener("click", async () => {
+    const ok = await fillGeoFromMapUrl("lineMapStart");
+    if (!ok) return;
     updateLineMapProgress();
     markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
-  document.getElementById("lineMapUseEndMapUrlBtn")?.addEventListener("click", () => {
-    fillGeoFromMapUrl("lineMapEnd");
+  document.getElementById("lineMapUseEndMapUrlBtn")?.addEventListener("click", async () => {
+    const ok = await fillGeoFromMapUrl("lineMapEnd");
+    if (!ok) return;
     updateLineMapProgress();
     markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
