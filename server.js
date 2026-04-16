@@ -612,6 +612,7 @@ app.get("/api/shift/delivery-status", (_req, res) => {
     lastTargetDate: db.shiftDelivery?.lastTargetDate || null,
     lastMode: db.shiftDelivery?.lastMode || null,
     sentCount: Number(db.shiftDelivery?.lastSentCount || 0),
+    history: Array.isArray(db.shiftDeliveryHistory) ? db.shiftDeliveryHistory.slice(-30).reverse() : [],
   });
 });
 
@@ -1395,14 +1396,7 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
       skippedCount += 1;
       continue;
     }
-    const userPlans = byEmployee.get(employeeName) || [];
-    const message =
-      userPlans.length > 0
-        ? `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\n` +
-          userPlans
-            .map((p, i) => `${i + 1}. ${p.start}-${p.end} / ${p.route}`)
-            .join("\n")
-        : `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\nシフトは未登録です。管理者に確認してください。`;
+    const message = buildShiftMessageForEmployee(db, targetDate, employeeName);
 
     const ok = await sendLinePush(userId, message);
     if (ok) sentCount += 1;
@@ -1416,6 +1410,13 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
     lastMode: mode,
     lastSentCount: sentCount,
   };
+  appendShiftDeliveryHistory(db, {
+    mode: mode === "auto" ? "auto_daily" : "manual_daily_all",
+    targetLabel: formatYmdWithWeekdayJp(targetDate),
+    sentCount,
+    skippedCount,
+    employee: "",
+  });
   writeDb(db);
   return { targetDate, sentCount, skippedCount };
 }
@@ -1442,6 +1443,21 @@ async function deliverShiftToEmployee(targetDate, employeeName) {
   }
   const message = buildShiftMessageForEmployee(db, targetDate, employeeName);
   const ok = await sendLinePush(targetUserId, message);
+  db.shiftDelivery = {
+    lastSentAt: new Date().toISOString(),
+    lastSentDateJst: getJstDateOffset(0),
+    lastTargetDate: `${targetDate} / ${employeeName}`,
+    lastMode: "manual_daily_one",
+    lastSentCount: ok ? 1 : 0,
+  };
+  appendShiftDeliveryHistory(db, {
+    mode: "manual_daily_one",
+    targetLabel: `${formatYmdWithWeekdayJp(targetDate)} / ${employeeName}`,
+    sentCount: ok ? 1 : 0,
+    skippedCount: ok ? 0 : 1,
+    employee: employeeName,
+  });
+  writeDb(db);
   return {
     targetDate,
     employee: employeeName,
@@ -1477,6 +1493,13 @@ async function deliverShiftRange(targetStartDate, targetEndDate, mode = "manual"
     lastMode: mode,
     lastSentCount: sentCount,
   };
+  appendShiftDeliveryHistory(db, {
+    mode: "manual_range_all",
+    targetLabel: `${formatYmdWithWeekdayJp(targetStartDate)}〜${formatYmdWithWeekdayJp(targetEndDate)}`,
+    sentCount,
+    skippedCount,
+    employee: "",
+  });
   writeDb(db);
   return { targetStartDate, targetEndDate, sentCount, skippedCount };
 }
@@ -1506,6 +1529,21 @@ async function deliverShiftRangeToEmployee(targetStartDate, targetEndDate, emplo
   }
   const message = buildShiftMessageForEmployeeRange(db, targetStartDate, targetEndDate, employeeName);
   const ok = await sendLinePush(targetUserId, message);
+  db.shiftDelivery = {
+    lastSentAt: new Date().toISOString(),
+    lastSentDateJst: getJstDateOffset(0),
+    lastTargetDate: `${targetStartDate}..${targetEndDate} / ${employeeName}`,
+    lastMode: "manual_range_one",
+    lastSentCount: ok ? 1 : 0,
+  };
+  appendShiftDeliveryHistory(db, {
+    mode: "manual_range_one",
+    targetLabel: `${formatYmdWithWeekdayJp(targetStartDate)}〜${formatYmdWithWeekdayJp(targetEndDate)} / ${employeeName}`,
+    sentCount: ok ? 1 : 0,
+    skippedCount: ok ? 0 : 1,
+    employee: employeeName,
+  });
+  writeDb(db);
   return {
     targetStartDate,
     targetEndDate,
@@ -1532,6 +1570,21 @@ async function runShiftAutoDelivery() {
   await deliverShiftByDate(targetDate, "auto");
 }
 
+function appendShiftDeliveryHistory(db, entry) {
+  db.shiftDeliveryHistory = Array.isArray(db.shiftDeliveryHistory) ? db.shiftDeliveryHistory : [];
+  db.shiftDeliveryHistory.push({
+    sentAt: new Date().toISOString(),
+    mode: String(entry?.mode || ""),
+    targetLabel: String(entry?.targetLabel || ""),
+    sentCount: Number(entry?.sentCount || 0),
+    skippedCount: Number(entry?.skippedCount || 0),
+    employee: String(entry?.employee || ""),
+  });
+  if (db.shiftDeliveryHistory.length > 200) {
+    db.shiftDeliveryHistory = db.shiftDeliveryHistory.slice(-200);
+  }
+}
+
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) {
@@ -1544,6 +1597,7 @@ function ensureDataFile() {
       lineUsersSeen: {},
       shiftPlans: [],
       shiftDelivery: null,
+      shiftDeliveryHistory: [],
       pendingActionConfirm: {},
       lineWorkflows: {},
       lastLocations: {},
@@ -1565,6 +1619,7 @@ function readDb() {
       parsed.lineUsersSeen = parsed.lineUsersSeen || {};
       parsed.shiftPlans = Array.isArray(parsed.shiftPlans) ? parsed.shiftPlans : [];
       parsed.shiftDelivery = parsed.shiftDelivery || null;
+      parsed.shiftDeliveryHistory = Array.isArray(parsed.shiftDeliveryHistory) ? parsed.shiftDeliveryHistory : [];
       parsed.pendingActionConfirm = parsed.pendingActionConfirm || {};
       parsed.lineWorkflows = parsed.lineWorkflows || {};
       parsed.lastLocations = parsed.lastLocations || {};
@@ -1587,6 +1642,7 @@ function readDb() {
     lineUsersSeen: {},
     shiftPlans: [],
     shiftDelivery: null,
+    shiftDeliveryHistory: [],
     pendingActionConfirm: {},
     lineWorkflows: {},
     lastLocations: {},

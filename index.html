@@ -405,22 +405,54 @@
         <section class="view" data-view="shifts">
           <section class="panel">
             <h2>シフト計画管理（予定 vs 実績）</h2>
-            <div class="filters">
-              <button type="button" class="btn btn-ghost" id="sendShiftNowBtn">明日分シフトをLINE配信</button>
-              <button type="button" class="btn btn-ghost" id="sendShiftOneBtn">選択社員へ個別配信</button>
-              <button type="button" class="btn btn-ghost" id="sendShiftRangeBtn">期間シフトを一斉配信</button>
-              <button type="button" class="btn btn-ghost" id="sendShiftRangeOneBtn">選択社員へ期間配信</button>
+            <div class="shift-delivery-grid">
+              <article class="shift-delivery-card">
+                <h3>A. 明日分を一斉配信</h3>
+                <p class="section-lead">全社員へ、明日のシフトを一括で配信します。</p>
+                <button type="button" class="btn btn-ghost" id="sendShiftNowBtn">明日分シフトをLINE配信</button>
+              </article>
+              <article class="shift-delivery-card">
+                <h3>B. 日付指定で配信</h3>
+                <p class="section-lead">特定日のシフトを配信します（全体/個別）。</p>
+                <form class="shift-delivery-form-inline">
+                  <input id="shiftSendDate" type="date" required />
+                  <select id="shiftEmployee" required></select>
+                  <button type="button" class="btn btn-ghost" id="sendShiftOneBtn">選択社員へ個別配信</button>
+                </form>
+              </article>
+              <article class="shift-delivery-card">
+                <h3>C. 期間で配信</h3>
+                <p class="section-lead">1週間〜1か月を配信できます（全体/個別）。</p>
+                <form id="shiftRangeForm" class="shift-delivery-form-inline">
+                  <input id="shiftRangeStartDate" type="date" required />
+                  <input id="shiftRangeEndDate" type="date" required />
+                  <button type="button" class="btn btn-ghost" id="sendShiftRangeBtn">期間シフトを一斉配信</button>
+                  <button type="button" class="btn btn-ghost" id="sendShiftRangeOneBtn">選択社員へ期間配信</button>
+                </form>
+              </article>
+              <article class="shift-delivery-card">
+                <h3>D. 配信履歴</h3>
+                <p id="shiftDeliveryStatus" class="section-lead">まだ配信実行していません</p>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>配信日時</th>
+                        <th>配信種別</th>
+                        <th>対象</th>
+                        <th>送信</th>
+                        <th>スキップ</th>
+                      </tr>
+                    </thead>
+                    <tbody id="shiftDeliveryHistoryBody"></tbody>
+                  </table>
+                </div>
+              </article>
               <label class="toolbar-field search">CSV取込<input id="shiftCsvInput" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" /></label>
-              <p id="shiftDeliveryStatus" class="section-lead">まだ配信実行していません</p>
             </div>
-            <form id="shiftRangeForm" class="shift-form">
-              <input id="shiftRangeStartDate" type="date" required />
-              <input id="shiftRangeEndDate" type="date" required />
-              <small class="section-lead">1週間〜1か月をLINEでまとめて配信できます</small>
-            </form>
             <form id="shiftPlanForm" class="shift-form">
               <input id="shiftDate" type="date" required />
-              <select id="shiftEmployee" required></select>
+              <select id="shiftEmployeePlan" required></select>
               <input id="shiftStart" type="time" value="08:00" required />
               <input id="shiftEnd" type="time" value="17:00" required />
               <select id="shiftRoute" required></select>

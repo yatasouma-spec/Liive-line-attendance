@@ -471,6 +471,33 @@ button {
   gap: 8px;
 }
 
+.shift-delivery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.shift-delivery-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.shift-delivery-card h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.shift-delivery-form-inline {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto auto;
+  gap: 8px;
+}
+
 .line-map-form {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -807,6 +834,8 @@ tbody tr:hover td {
   .big-button-grid,
   .master-form,
   .shift-form,
+  .shift-delivery-grid,
+  .shift-delivery-form-inline,
   .line-map-form {
     grid-template-columns: 1fr;
   }

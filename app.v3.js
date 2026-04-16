@@ -773,7 +773,7 @@ function populateSelectors() {
   const employeeIdOptions = activeEmployees().map((e) => `<option value="${e.id}">${e.name}</option>`).join("");
   const routeOptions = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
 
-  ["lineEmployee", "shiftEmployee", "leaveEmployee"].forEach((id) => {
+  ["lineEmployee", "shiftEmployee", "shiftEmployeePlan", "leaveEmployee"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
@@ -2193,6 +2193,7 @@ async function sendShiftNow(targetDate = "") {
     if (status) {
       status.textContent = `配信完了: 対象${data?.targetDate || "-"} / 送信${data?.sentCount || 0}件 / スキップ${data?.skippedCount || 0}件`;
     }
+    fetchShiftDeliveryStatus();
   } catch (_e) {
     if (status) status.textContent = "配信失敗";
   }
@@ -2216,6 +2217,7 @@ async function sendShiftOne(targetDate = "", employee = "") {
         status.textContent += ` / 理由: ${data.reason}`;
       }
     }
+    fetchShiftDeliveryStatus();
   } catch (_e) {
     if (status) status.textContent = "個別配信失敗";
   }
@@ -2238,6 +2240,7 @@ async function sendShiftRange(targetStartDate = "", targetEndDate = "", employee
         ? `個別期間配信完了: ${employee} / ${data?.targetStartDate || "-"}〜${data?.targetEndDate || "-"} / 送信${data?.sentCount || 0}件${(data?.sentCount || 0) < 1 && data?.reason ? ` / 理由: ${data.reason}` : ""}`
         : `期間配信完了: ${data?.targetStartDate || "-"}〜${data?.targetEndDate || "-"} / 送信${data?.sentCount || 0}件 / スキップ${data?.skippedCount || 0}件`;
     }
+    fetchShiftDeliveryStatus();
   } catch (_e) {
     if (status) status.textContent = "期間配信失敗";
   }
@@ -2253,6 +2256,33 @@ async function fetchShiftDeliveryStatus() {
       status.textContent = data.lastSentAt
         ? `最終配信: ${new Date(data.lastSentAt).toLocaleString("ja-JP")} / 対象${data.lastTargetDate || "-"}`
         : "まだ自動配信履歴はありません";
+    }
+    const historyBody = document.getElementById("shiftDeliveryHistoryBody");
+    if (historyBody) {
+      const rows = Array.isArray(data.history) ? data.history : [];
+      const kindMap = {
+        auto_daily: "自動: 明日分一斉",
+        manual_daily_all: "手動: 明日分一斉",
+        manual_daily_one: "手動: 1日個別",
+        manual_range_all: "手動: 期間一斉",
+        manual_range_one: "手動: 期間個別",
+      };
+      historyBody.innerHTML = rows.length
+        ? rows
+            .map((r) => {
+              const sentAt = r.sentAt ? new Date(r.sentAt).toLocaleString("ja-JP") : "-";
+              const kind = kindMap[r.mode] || r.mode || "-";
+              const target = r.targetLabel || "-";
+              return `<tr>
+                <td>${sentAt}</td>
+                <td>${kind}</td>
+                <td>${target}</td>
+                <td>${Number(r.sentCount || 0)}件</td>
+                <td>${Number(r.skippedCount || 0)}件</td>
+              </tr>`;
+            })
+            .join("")
+        : `<tr><td colspan="5" class="section-lead">配信履歴はまだありません</td></tr>`;
     }
   } catch (_e) {}
 }
@@ -2396,7 +2426,7 @@ function bindMasterEvents() {
   document.getElementById("shiftPlanForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const date = document.getElementById("shiftDate").value;
-    const employee = document.getElementById("shiftEmployee").value;
+    const employee = document.getElementById("shiftEmployeePlan").value;
     const start = document.getElementById("shiftStart").value;
     const end = document.getElementById("shiftEnd").value;
     const route = document.getElementById("shiftRoute").value;
@@ -2582,7 +2612,7 @@ function bindMasterEvents() {
       const row = state.shiftPlans.find((s) => s.id === editId);
       if (!row) return;
       const dateInput = document.getElementById("shiftDate");
-      const employeeInput = document.getElementById("shiftEmployee");
+      const employeeInput = document.getElementById("shiftEmployeePlan");
       const startInput = document.getElementById("shiftStart");
       const endInput = document.getElementById("shiftEnd");
       const routeInput = document.getElementById("shiftRoute");
@@ -2759,7 +2789,7 @@ function bindMasterEvents() {
       alert("送信対象の社員を選択してください");
       return;
     }
-    const targetDate = document.getElementById("shiftDate")?.value || new Date().toISOString().slice(0, 10);
+    const targetDate = document.getElementById("shiftSendDate")?.value || new Date().toISOString().slice(0, 10);
     sendShiftOne(targetDate, employee);
   });
 
@@ -2850,6 +2880,12 @@ function bindEvents() {
 
   const shiftDate = document.getElementById("shiftDate");
   if (shiftDate) shiftDate.value = new Date().toISOString().slice(0, 10);
+  const shiftSendDate = document.getElementById("shiftSendDate");
+  if (shiftSendDate) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    shiftSendDate.value = tomorrow.toISOString().slice(0, 10);
+  }
   const shiftRangeStartDate = document.getElementById("shiftRangeStartDate");
   if (shiftRangeStartDate) shiftRangeStartDate.value = new Date().toISOString().slice(0, 10);
   const shiftRangeEndDate = document.getElementById("shiftRangeEndDate");
