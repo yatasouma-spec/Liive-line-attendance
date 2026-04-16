@@ -312,16 +312,36 @@ app.get("/api/bootstrap", (_req, res) => {
 });
 
 app.post("/api/maps/resolve-latlng", async (req, res) => {
-  const url = String(req.body?.url || "").trim();
-  if (!url) {
-    return res.status(400).json({ ok: false, error: "url is required" });
+  const input = String(req.body?.url || "").trim();
+  if (!input) {
+    return res.status(400).json({ ok: false, error: "url or address is required" });
   }
-  const direct = parseGoogleMapsLatLng(url);
+  if (!looksLikeUrl(input)) {
+    const resolved = await geocodeAddress(input);
+    if (!resolved) {
+      return res.status(422).json({ ok: false, error: "address geocode failed" });
+    }
+    return res.json({
+      ok: true,
+      lat: resolved.lat,
+      lng: resolved.lng,
+      placeName: resolved.placeName || input,
+      resolvedUrl: `address:${input}`,
+    });
+  }
+
+  const direct = parseGoogleMapsLatLng(input);
   if (direct) {
-    return res.json({ ok: true, lat: direct.lat, lng: direct.lng, placeName: extractPlaceNameFromMapsUrl(url), resolvedUrl: url });
+    return res.json({
+      ok: true,
+      lat: direct.lat,
+      lng: direct.lng,
+      placeName: extractPlaceNameFromMapsUrl(input),
+      resolvedUrl: input,
+    });
   }
   try {
-    const response = await fetch(url, {
+    const response = await fetch(input, {
       method: "GET",
       redirect: "follow",
       headers: {
@@ -329,7 +349,7 @@ app.post("/api/maps/resolve-latlng", async (req, res) => {
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
     });
-    const resolvedUrl = response.url || url;
+    const resolvedUrl = response.url || input;
     const parsed = parseGoogleMapsLatLng(resolvedUrl);
     if (!parsed) {
       return res.status(422).json({ ok: false, error: "latlng not found", resolvedUrl });
@@ -338,7 +358,7 @@ app.post("/api/maps/resolve-latlng", async (req, res) => {
       ok: true,
       lat: parsed.lat,
       lng: parsed.lng,
-      placeName: extractPlaceNameFromMapsUrl(resolvedUrl) || extractPlaceNameFromMapsUrl(url),
+      placeName: extractPlaceNameFromMapsUrl(resolvedUrl) || extractPlaceNameFromMapsUrl(input),
       resolvedUrl,
     });
   } catch (error) {
@@ -642,6 +662,38 @@ function parseGoogleMapsLatLng(urlText) {
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;
+}
+
+function looksLikeUrl(text) {
+  return /^https?:\/\//i.test(String(text || "").trim());
+}
+
+async function geocodeAddress(addressText) {
+  const query = String(addressText || "").trim();
+  if (!query) return null;
+  try {
+    const endpoint = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        "user-agent": "Liive-Attendance/1.0 (support@sellyou.info)",
+        accept: "application/json",
+      },
+    });
+    if (!response.ok) return null;
+    const rows = await response.json();
+    if (!Array.isArray(rows) || !rows[0]) return null;
+    const lat = Number(rows[0].lat);
+    const lng = Number(rows[0].lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return {
+      lat,
+      lng,
+      placeName: String(rows[0].display_name || query),
+    };
+  } catch (_e) {
+    return null;
+  }
 }
 
 function needsConfirmAction(action) {

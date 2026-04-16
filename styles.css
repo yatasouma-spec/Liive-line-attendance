@@ -529,6 +529,15 @@ button {
   font-size: 0.88rem;
 }
 
+.line-map-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sub);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
 .line-map-status {
   margin: 0;
   padding: 6px 10px;

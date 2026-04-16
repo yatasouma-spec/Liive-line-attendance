@@ -22,7 +22,7 @@
           <button type="button" class="nav-link" data-view="punch">打刻（LINE）</button>
           <button type="button" class="nav-link" data-view="records">勤怠履歴</button>
           <button type="button" class="nav-link" data-view="summary">月次集計</button>
-          <button type="button" class="nav-link" data-view="masters">社員/ルート設定</button>
+          <button type="button" class="nav-link" data-view="masters">社員/現場設定</button>
           <button type="button" class="nav-link" data-view="shifts">シフト管理</button>
           <button type="button" class="nav-link" data-view="leaves">休暇申請管理</button>
           <button type="button" class="nav-link" data-view="lineusers">LINEユーザー紐付け</button>
@@ -67,11 +67,11 @@
             </article>
             <article class="panel chart-panel">
               <div class="panel-head">
-                <h2>ルート別工数（円グラフ）</h2>
+                <h2>現場別工数（円グラフ）</h2>
                 <span class="section-lead" id="routeRatioLabel">-</span>
               </div>
               <div class="donut-wrap">
-                <svg id="routeDonutChart" class="donut-chart" viewBox="0 0 200 200" aria-label="ルート別工数チャート"></svg>
+                <svg id="routeDonutChart" class="donut-chart" viewBox="0 0 200 200" aria-label="現場別工数チャート"></svg>
                 <ul class="chart-legend" id="routeDonutLegend"></ul>
               </div>
             </article>
@@ -90,7 +90,7 @@
               <h2>最新打刻</h2>
               <ul class="status-list">
                 <li><span>社員</span><strong id="latestEmployee">-</strong></li>
-                <li><span>現場/ルート</span><strong id="latestSite">-</strong></li>
+                <li><span>現場</span><strong id="latestSite">-</strong></li>
                 <li><span>種別</span><strong id="latestAction">-</strong></li>
                 <li><span>時刻</span><strong id="latestTime">-</strong></li>
               </ul>
@@ -157,7 +157,7 @@
               <label>社員
                 <select id="lineEmployee"></select>
               </label>
-              <label>収集ルート / 現場
+              <label>勤務現場
                 <select id="lineSite"></select>
               </label>
               <label>飲酒値（mg/L）
@@ -210,7 +210,7 @@
                   <tr>
                     <th>日付</th>
                     <th>社員</th>
-                    <th>現場/ルート</th>
+                    <th>現場</th>
                     <th>出勤</th>
                     <th>退勤</th>
                     <th>労働</th>
@@ -338,26 +338,27 @@
             </article>
 
             <article class="panel">
-              <h2>ルート/現場マスタ管理</h2>
+              <h2>現場（勤務先）マスタ管理</h2>
               <form id="routeForm" class="master-form">
-                <input id="routeName" type="text" placeholder="ルート名 例: 本社回収ルートA" required />
-                <input id="routeGeoMapUrl" type="text" placeholder="拠点のGoogleマップURLを貼り付け（推奨）" />
+                <input id="routeName" type="text" placeholder="現場名 例: 本社回収現場A" required />
+                <input id="routeGeoMapUrl" type="text" placeholder="拠点のGoogleマップURL または 住所を入力" />
                 <div class="toolbar-actions">
-                  <button type="button" class="btn btn-ghost" id="routeUseMapUrlBtn">URLから位置設定</button>
+                  <button type="button" class="btn btn-ghost" id="routeUseMapUrlBtn">URL/住所から位置設定</button>
                   <button type="button" class="btn btn-ghost" id="routeUseCurrentGpsBtn">現在地を拠点に設定</button>
                 </div>
-                <input id="routeGeoPlaceName" type="text" placeholder="拠点名（URLから自動表示）" readonly />
+                <p class="line-map-help">拠点名: <span id="routeGeoPlacePreview">未設定</span></p>
+                <input id="routeGeoPlaceName" type="hidden" />
                 <input id="routeGeoRadius" type="number" min="50" step="10" placeholder="許容半径m（例: 300）" />
                 <input id="routeGeoLat" type="hidden" />
                 <input id="routeGeoLng" type="hidden" />
-                <button type="submit" class="btn">ルートを追加</button>
+                <button type="submit" class="btn">現場を追加</button>
               </form>
               <div class="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>ルート名</th>
-                      <th>位置ルール</th>
+                      <th>現場名</th>
+                      <th>打刻許可エリア</th>
                       <th>状態</th>
                       <th>操作</th>
                     </tr>
@@ -394,7 +395,7 @@
                     <th>社員</th>
                     <th>予定開始</th>
                     <th>予定終了</th>
-                    <th>予定ルート</th>
+                    <th>予定現場</th>
                     <th>操作</th>
                   </tr>
                 </thead>
@@ -446,16 +447,16 @@
                 <h3>1. 社員情報</h3>
                 <input id="lineUserIdInput" type="text" placeholder="LINE userId (Uから始まる文字列)" required />
                 <select id="lineMapEmployee" required></select>
-                <input id="lineMapSiteName" type="text" placeholder="担当現場名（例: 本社回収ルートA）" required />
+                <input id="lineMapSiteName" type="text" placeholder="担当現場名（例: 本社回収現場A）" required />
                 <p id="lineMapSaveStatus" class="line-map-status neutral">未保存</p>
               </section>
 
               <section class="line-map-card line-map-card-start">
                 <h3>2. 開始地点（出勤地点）</h3>
-                <label class="line-map-label" for="lineMapStartGeoMapUrl">GoogleマップURL</label>
-                <input id="lineMapStartGeoMapUrl" type="text" placeholder="開始地点のGoogleマップURL" />
+                <label class="line-map-label" for="lineMapStartGeoMapUrl">GoogleマップURL / 住所</label>
+                <input id="lineMapStartGeoMapUrl" type="text" placeholder="開始地点のGoogleマップURL または 住所" />
                 <div class="line-map-actions">
-                  <button type="button" class="btn btn-ghost" id="lineMapUseStartMapUrlBtn">開始地点をURLから設定</button>
+                  <button type="button" class="btn btn-ghost" id="lineMapUseStartMapUrlBtn">開始地点をURL/住所から設定</button>
                 </div>
                 <p class="line-map-help">地点名: <span id="lineMapStartGeoPlacePreview">未設定</span></p>
                 <input id="lineMapStartGeoPlaceName" type="hidden" />
@@ -468,10 +469,14 @@
 
               <section class="line-map-card line-map-card-end">
                 <h3>3. 退勤地点</h3>
-                <label class="line-map-label" for="lineMapEndGeoMapUrl">GoogleマップURL</label>
-                <input id="lineMapEndGeoMapUrl" type="text" placeholder="退勤地点のGoogleマップURL（同じ場所なら同じURL）" />
+                <label class="line-map-inline">
+                  <input id="lineMapSameEndAsStart" type="checkbox" checked />
+                  退勤地点は開始地点と同じ
+                </label>
+                <label class="line-map-label" for="lineMapEndGeoMapUrl">GoogleマップURL / 住所</label>
+                <input id="lineMapEndGeoMapUrl" type="text" placeholder="退勤地点のGoogleマップURL または 住所（同じ場所なら不要）" />
                 <div class="line-map-actions">
-                  <button type="button" class="btn btn-ghost" id="lineMapUseEndMapUrlBtn">退勤地点をURLから設定</button>
+                  <button type="button" class="btn btn-ghost" id="lineMapUseEndMapUrlBtn">退勤地点をURL/住所から設定</button>
                 </div>
                 <p class="line-map-help">地点名: <span id="lineMapEndGeoPlacePreview">未設定</span></p>
                 <input id="lineMapEndGeoPlaceName" type="hidden" />
