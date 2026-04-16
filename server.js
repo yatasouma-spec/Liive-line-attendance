@@ -1300,12 +1300,20 @@ function buildShiftMessageForEmployee(db, targetDate, employeeName) {
   const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
   const userPlans = plans.filter((p) => p.date === targetDate && p.employee === employeeName);
   if (userPlans.length === 0) {
-    return `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\nシフトは未登録です。管理者に確認してください。`;
+    return `【Liive シフト連絡】\n対象日: ${formatYmdWithWeekdayJp(targetDate)}\nシフトは未登録です。管理者に確認してください。`;
   }
-  return (
-    `【Liive シフト連絡】\n対象日: ${formatYmdJp(targetDate)}\n` +
-    userPlans.map((p, i) => `${i + 1}. ${p.start}-${p.end} / ${p.route}`).join("\n")
-  );
+  const lines = userPlans
+    .sort((a, b) => String(a.start || "").localeCompare(String(b.start || "")))
+    .map((p, i) => `${i + 1}. ${p.start}-${p.end} | ${p.route}`);
+  return [
+    "【Liive シフト連絡】",
+    `対象日: ${formatYmdWithWeekdayJp(targetDate)}`,
+    `件数: ${userPlans.length}件`,
+    "",
+    "時間 | 現場",
+    "----------------",
+    ...lines,
+  ].join("\n");
 }
 
 function buildShiftMessageForEmployeeRange(db, startDate, endDate, employeeName) {
@@ -1315,12 +1323,18 @@ function buildShiftMessageForEmployeeRange(db, startDate, endDate, employeeName)
     .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
 
   if (userPlans.length === 0) {
-    return `【Liive シフト連絡】\n対象期間: ${formatYmdJp(startDate)}〜${formatYmdJp(endDate)}\nシフトは未登録です。管理者に確認してください。`;
+    return `【Liive シフト連絡】\n対象期間: ${formatYmdWithWeekdayJp(startDate)}〜${formatYmdWithWeekdayJp(endDate)}\nシフトは未登録です。管理者に確認してください。`;
   }
-  return (
-    `【Liive シフト連絡】\n対象期間: ${formatYmdJp(startDate)}〜${formatYmdJp(endDate)}\n` +
-    userPlans.map((p) => `${formatYmdJp(p.date)} ${p.start}-${p.end} / ${p.route}`).join("\n")
-  );
+  const lines = userPlans.map((p) => `${formatYmdWithWeekdayJp(p.date)} | ${p.start}-${p.end} | ${p.route}`);
+  return [
+    "【Liive シフト連絡】",
+    `対象期間: ${formatYmdWithWeekdayJp(startDate)}〜${formatYmdWithWeekdayJp(endDate)}`,
+    `件数: ${userPlans.length}件`,
+    "",
+    "日付 | 時間 | 現場",
+    "---------------------------",
+    ...lines,
+  ].join("\n");
 }
 
 function getJstDateOffset(offsetDays = 0) {
@@ -1347,6 +1361,15 @@ function formatYmdJp(ymd) {
   const [y, m, d] = String(ymd || "").split("-");
   if (!y || !m || !d) return ymd;
   return `${y}/${m}/${d}`;
+}
+
+function formatYmdWithWeekdayJp(ymd) {
+  const normalized = String(ymd || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return formatYmdJp(ymd);
+  const dt = new Date(`${normalized}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return formatYmdJp(ymd);
+  const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
+  return `${formatYmdJp(normalized)}(${weekdays[dt.getDay()]})`;
 }
 
 async function deliverShiftByDate(targetDate, mode = "manual") {
