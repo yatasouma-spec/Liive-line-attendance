@@ -50,7 +50,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     const db = readDb();
     const profile = db.userMap?.[userId] || LINE_USER_MAP[userId] || {};
     const employee = profile.employeeName || profile.employee || `LINE-${userId.slice(-4)}`;
-    const site = profile.site || "LINE現場";
+    const site = profile.site || "未設定（現場未紐付け）";
     const mapped = profile.employeeName || profile.employee ? "yes" : "no";
 
     if (event.message?.type === "location") {

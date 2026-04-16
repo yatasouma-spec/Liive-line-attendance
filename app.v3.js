@@ -173,6 +173,12 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function displaySiteLabel(site) {
+  const raw = normalizeText(site || "");
+  if (!raw || raw === "LINE現場") return "未設定（現場未紐付け）";
+  return raw;
+}
+
 function extractPlaceNameFromMapsUrl(urlText) {
   const text = normalizeText(urlText);
   if (!text) return "";
@@ -941,7 +947,7 @@ function renderPendingApprovals() {
       (row) => `<tr>
       <td>${row.date}</td>
       <td>${row.employee}</td>
-      <td>${row.currentCheckIn}→${row.newCheckIn} / ${row.currentCheckOut}→${row.newCheckOut}${row.site ? ` / ${row.site}` : ""}</td>
+      <td>${row.currentCheckIn}→${row.newCheckIn} / ${row.currentCheckOut}→${row.newCheckOut}${row.site ? ` / ${displaySiteLabel(row.site)}` : ""}</td>
       <td>${row.requestType === "auto_fill" ? "【自動補正】" : ""}${row.reason}</td>
       <td>
         <button class="btn btn-ghost" data-open-correction="${row.id}">修正対応で処理</button>
@@ -969,11 +975,12 @@ function renderCorrectionDesk() {
       const outVal = isValidTimeText(req.newCheckOut) ? req.newCheckOut : "";
       const requestedAt = req.requestedAt || "-";
       const requestedBy = req.requestedBy || req.employee || "-";
+      const siteLabel = displaySiteLabel(req.site);
       return `<tr id="correction-row-${req.id}">
         <td>${requestedAt}</td>
         <td>${requestedBy}</td>
         <td>${req.date || "-"}</td>
-        <td>${req.currentCheckIn || "-"} / ${req.currentCheckOut || "-"}${req.site ? `<br><span class="section-lead">${req.site}</span>` : ""}</td>
+        <td>${req.currentCheckIn || "-"} / ${req.currentCheckOut || "-"}${req.site ? `<br><span class="section-lead">${siteLabel}</span>` : ""}</td>
         <td>
           <select data-correction-field="status" data-correction-id="${req.id}">
             <option value="normal" ${fixStatus === "normal" ? "selected" : ""}>通常（出退勤）</option>
@@ -1089,7 +1096,7 @@ function renderPunchLogs() {
         .map((r) => {
           const geo = state.gpsByEvent[eventKey(r)];
           const gpsTxt = geo ? ` / GPS ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}` : "";
-          return `<li><strong>${r.employee} / ${r.action}</strong><p>${r.date} ${r.time} / ${r.site}${gpsTxt}</p></li>`;
+          return `<li><strong>${r.employee} / ${r.action}</strong><p>${r.date} ${r.time} / ${displaySiteLabel(r.site)}${gpsTxt}</p></li>`;
         })
         .join("")
     : "<li><p>打刻履歴がありません</p></li>";
