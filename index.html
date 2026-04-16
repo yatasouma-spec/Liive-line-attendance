@@ -22,6 +22,7 @@
           <button type="button" class="nav-link" data-view="punch">打刻（LINE）</button>
           <button type="button" class="nav-link" data-view="records">勤怠履歴</button>
           <button type="button" class="nav-link" data-view="summary">月次集計</button>
+          <button type="button" class="nav-link" data-view="corrections">修正対応</button>
           <button type="button" class="nav-link" data-view="masters">社員/現場設定</button>
           <button type="button" class="nav-link" data-view="shifts">シフト管理</button>
           <button type="button" class="nav-link" data-view="leaves">休暇申請管理</button>
@@ -308,6 +309,34 @@
                   </tr>
                 </thead>
                 <tbody id="summaryBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="corrections">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>修正対応（承認・却下・管理者修正）</h2>
+              <strong id="correctionDeskCount">0件</strong>
+            </div>
+            <p class="section-lead">誤打刻の依頼を確認し、管理者がステータスと時刻を調整して承認します。承認/却下履歴は監査ログに残ります。</p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>依頼日時</th>
+                    <th>依頼者</th>
+                    <th>対象日</th>
+                    <th>依頼内容</th>
+                    <th>修正ステータス</th>
+                    <th>出勤時刻</th>
+                    <th>退勤時刻</th>
+                    <th>理由</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="correctionDeskBody"></tbody>
               </table>
             </div>
           </section>

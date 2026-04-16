@@ -77,6 +77,7 @@ const viewTitle = {
   punch: "打刻（LINE）",
   records: "勤怠履歴",
   summary: "月次集計",
+  corrections: "修正対応",
   masters: "社員/現場設定",
   shifts: "シフト管理",
   leaves: "休暇申請管理",
@@ -161,6 +162,15 @@ function getVehicleNameByEmployee(employeeName) {
 function normalizeText(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function extractPlaceNameFromMapsUrl(urlText) {
@@ -616,6 +626,8 @@ function generateAutoFillCandidates() {
     if (pendingCorrectionExists(source)) return;
     state.pendingCorrections.push({
       id: uid("p"),
+      requestedAt: new Date().toLocaleString("ja-JP"),
+      requestedBy: plan.employee,
       sourceKey: source,
       date: plan.date,
       employee: plan.employee,
@@ -625,6 +637,7 @@ function generateAutoFillCandidates() {
       newCheckIn: plan.start,
       newCheckOut: plan.end,
       newBreakMin: 60,
+      fixStatus: "normal",
       reason: "打刻漏れ自動補正（シフト予定ベース）",
       requestType: "auto_fill",
     });
@@ -931,15 +944,53 @@ function renderPendingApprovals() {
       <td>${row.currentCheckIn}→${row.newCheckIn} / ${row.currentCheckOut}→${row.newCheckOut}${row.site ? ` / ${row.site}` : ""}</td>
       <td>${row.requestType === "auto_fill" ? "【自動補正】" : ""}${row.reason}</td>
       <td>
-        ${
-          row.requestType === "line_request"
-            ? `<button class="btn btn-ghost" data-reject="${row.id}">確認済みにする</button>`
-            : `<button class="btn" data-approve="${row.id}">承認</button>
-               <button class="btn btn-ghost" data-reject="${row.id}">却下</button>`
-        }
+        <button class="btn btn-ghost" data-open-correction="${row.id}">修正対応で処理</button>
       </td>
     </tr>`
     )
+    .join("");
+}
+
+function renderCorrectionDesk() {
+  const body = document.getElementById("correctionDeskBody");
+  const count = document.getElementById("correctionDeskCount");
+  if (!body || !count) return;
+
+  count.textContent = `${state.pendingCorrections.length}件`;
+  if (!state.pendingCorrections.length) {
+    body.innerHTML = '<tr><td class="empty" colspan="9">修正依頼はありません</td></tr>';
+    return;
+  }
+
+  body.innerHTML = state.pendingCorrections
+    .map((req) => {
+      const fixStatus = req.fixStatus || "normal";
+      const inVal = isValidTimeText(req.newCheckIn) ? req.newCheckIn : "";
+      const outVal = isValidTimeText(req.newCheckOut) ? req.newCheckOut : "";
+      const requestedAt = req.requestedAt || "-";
+      const requestedBy = req.requestedBy || req.employee || "-";
+      return `<tr id="correction-row-${req.id}">
+        <td>${requestedAt}</td>
+        <td>${requestedBy}</td>
+        <td>${req.date || "-"}</td>
+        <td>${req.currentCheckIn || "-"} / ${req.currentCheckOut || "-"}${req.site ? `<br><span class="section-lead">${req.site}</span>` : ""}</td>
+        <td>
+          <select data-correction-field="status" data-correction-id="${req.id}">
+            <option value="normal" ${fixStatus === "normal" ? "selected" : ""}>通常（出退勤）</option>
+            <option value="checkin_only" ${fixStatus === "checkin_only" ? "selected" : ""}>出勤に修正</option>
+            <option value="checkout_only" ${fixStatus === "checkout_only" ? "selected" : ""}>退勤に修正</option>
+            <option value="cancel" ${fixStatus === "cancel" ? "selected" : ""}>打刻取消</option>
+          </select>
+        </td>
+        <td><input type="time" data-correction-field="checkin" data-correction-id="${req.id}" value="${inVal}" /></td>
+        <td><input type="time" data-correction-field="checkout" data-correction-id="${req.id}" value="${outVal}" /></td>
+        <td><input type="text" data-correction-field="reason" data-correction-id="${req.id}" value="${escapeHtml(req.reason || "")}" placeholder="理由を入力" /></td>
+        <td>
+          <button class="btn" data-desk-approve="${req.id}">承認</button>
+          <button class="btn btn-ghost" data-desk-reject="${req.id}">却下</button>
+        </td>
+      </tr>`;
+    })
     .join("");
 }
 
@@ -1265,6 +1316,7 @@ function renderAll() {
   renderPunchLogs();
   renderTimecards();
   renderSummary();
+  renderCorrectionDesk();
   renderMasters();
   renderMonthUnlockRequests();
   renderLeaveRequests();
@@ -1432,6 +1484,21 @@ function recalcByTimes(date, checkIn, checkOut, breakMin) {
   };
 }
 
+function isValidTimeText(text) {
+  return /^\d{2}:\d{2}$/.test(String(text || ""));
+}
+
+function correctionStatusLabel(status) {
+  if (status === "checkin_only") return "出勤に修正";
+  if (status === "checkout_only") return "退勤に修正";
+  if (status === "cancel") return "打刻取消";
+  return "通常（出退勤）";
+}
+
+function buildCorrectionDiffText(beforeIn, beforeOut, afterIn, afterOut, status) {
+  return `${beforeIn || "-"}→${afterIn || "-"} / ${beforeOut || "-"}→${afterOut || "-"} / ${correctionStatusLabel(status)}`;
+}
+
 function requestCorrection(source) {
   const row = state.timecards.find((r) => (r.sourceKey || sourceKey(r)) === source);
   if (!row) return;
@@ -1452,6 +1519,8 @@ function requestCorrection(source) {
 
   state.pendingCorrections.push({
     id: uid("p"),
+    requestedAt: new Date().toLocaleString("ja-JP"),
+    requestedBy: row.employee,
     sourceKey: source,
     date: row.date,
     employee: row.employee,
@@ -1461,6 +1530,7 @@ function requestCorrection(source) {
     newCheckIn: newIn,
     newCheckOut: newOut,
     newBreakMin: Number(newBreak || 0),
+    fixStatus: "normal",
     reason,
     requestType: "manual",
   });
@@ -1479,6 +1549,8 @@ function requestCorrectionByEmployee() {
   if (!reason) return;
   state.pendingCorrections.push({
     id: uid("p"),
+    requestedAt: new Date().toLocaleString("ja-JP"),
+    requestedBy: employee,
     sourceKey: "",
     date: new Date().toISOString().slice(0, 10),
     employee,
@@ -1488,10 +1560,28 @@ function requestCorrectionByEmployee() {
     newCheckIn: "-",
     newCheckOut: "-",
     newBreakMin: 0,
+    fixStatus: "normal",
     reason,
     requestType: "manual",
   });
   renderAll();
+}
+
+function collectCorrectionOverride(id) {
+  const req = state.pendingCorrections.find((p) => p.id === id);
+  if (!req) return null;
+  const statusEl = document.querySelector(`[data-correction-field="status"][data-correction-id="${id}"]`);
+  const inEl = document.querySelector(`[data-correction-field="checkin"][data-correction-id="${id}"]`);
+  const outEl = document.querySelector(`[data-correction-field="checkout"][data-correction-id="${id}"]`);
+  const reasonEl = document.querySelector(`[data-correction-field="reason"][data-correction-id="${id}"]`);
+
+  return {
+    fixStatus: normalizeText(statusEl?.value || req.fixStatus || "normal"),
+    newCheckIn: normalizeText(inEl?.value ?? req.newCheckIn),
+    newCheckOut: normalizeText(outEl?.value ?? req.newCheckOut),
+    newBreakMin: Number(req.newBreakMin || 0),
+    reason: normalizeText(reasonEl?.value || req.reason || ""),
+  };
 }
 
 function parseShiftCsv(text) {
@@ -1511,7 +1601,7 @@ function parseShiftCsv(text) {
     .filter((row) => row.date && row.employee && row.start && row.end && row.route);
 }
 
-function approveCorrection(id) {
+function approveCorrection(id, override = null) {
   const req = state.pendingCorrections.find((p) => p.id === id);
   if (!req) return;
   const month = (req.date || "").slice(0, 7);
@@ -1520,39 +1610,101 @@ function approveCorrection(id) {
     return;
   }
 
-  const recalc = recalcByTimes(req.date, req.newCheckIn, req.newCheckOut, Number(req.newBreakMin || 0));
-  const base = state.timecards.find((r) => (r.sourceKey || sourceKey(r)) === req.sourceKey);
-  const corrected = {
-    ...(base || {}),
-    date: req.date,
-    employee: req.employee,
-    site: req.site || base?.site || "-",
-    checkIn: req.newCheckIn,
-    checkOut: req.newCheckOut,
-    breakMin: Number(req.newBreakMin || 0),
-    hours: recalc.hours,
-    overtime: recalc.overtime,
-    isLate: recalc.isLate,
-    payrollEligible: recalc.payrollEligible,
-    payrollRule: recalc.payrollEligible ? "normal_window" : "outside_window",
-    corrected: true,
-    correctionReason: req.reason,
-    correctedAt: new Date().toISOString(),
+  const payload = {
+    fixStatus: normalizeText(override?.fixStatus || req.fixStatus || "normal"),
+    newCheckIn: normalizeText(override?.newCheckIn ?? req.newCheckIn),
+    newCheckOut: normalizeText(override?.newCheckOut ?? req.newCheckOut),
+    newBreakMin: Number(override?.newBreakMin ?? req.newBreakMin ?? 0),
+    reason: normalizeText(override?.reason || req.reason || ""),
   };
-  corrected.sourceKey = req.sourceKey || sourceKey(corrected);
+  if (!payload.reason) {
+    alert("承認理由を入力してください。");
+    return;
+  }
 
-  state.approvedCorrectionMap[corrected.sourceKey] = corrected;
-  if (base) {
+  const fixStatus = payload.fixStatus || "normal";
+  let nextCheckIn = payload.newCheckIn;
+  let nextCheckOut = payload.newCheckOut;
+  let nextBreakMin = Number.isFinite(payload.newBreakMin) ? Math.max(0, payload.newBreakMin) : 0;
+
+  if (fixStatus === "normal") {
+    if (!isValidTimeText(nextCheckIn) || !isValidTimeText(nextCheckOut)) {
+      alert("通常（出退勤）では出勤時刻と退勤時刻の両方を入力してください。");
+      return;
+    }
+  } else if (fixStatus === "checkin_only") {
+    if (!isValidTimeText(nextCheckIn)) {
+      alert("出勤に修正する場合は、出勤時刻を入力してください。");
+      return;
+    }
+    nextCheckOut = "";
+    nextBreakMin = 0;
+  } else if (fixStatus === "checkout_only") {
+    if (!isValidTimeText(nextCheckOut)) {
+      alert("退勤に修正する場合は、退勤時刻を入力してください。");
+      return;
+    }
+    nextCheckIn = "";
+    nextBreakMin = 0;
+  } else if (fixStatus === "cancel") {
+    nextCheckIn = "";
+    nextCheckOut = "";
+    nextBreakMin = 0;
+  }
+
+  const base = state.timecards.find((r) => (r.sourceKey || sourceKey(r)) === req.sourceKey);
+  let corrected = null;
+
+  if (fixStatus !== "cancel") {
+    const recalc =
+      fixStatus === "normal"
+        ? recalcByTimes(req.date, nextCheckIn, nextCheckOut, nextBreakMin)
+        : {
+            hours: 0,
+            overtime: 0,
+            isLate: false,
+            payrollEligible: false,
+          };
+
+    corrected = {
+      ...(base || {}),
+      date: req.date,
+      employee: req.employee,
+      site: req.site || base?.site || "-",
+      checkIn: nextCheckIn || "-",
+      checkOut: nextCheckOut || "-",
+      breakMin: nextBreakMin,
+      hours: recalc.hours,
+      overtime: recalc.overtime,
+      isLate: recalc.isLate,
+      payrollEligible: recalc.payrollEligible,
+      payrollRule: recalc.payrollEligible ? "normal_window" : "outside_window",
+      corrected: true,
+      correctionReason: payload.reason,
+      correctionStatus: fixStatus,
+      correctedAt: new Date().toISOString(),
+    };
+    corrected.sourceKey = req.sourceKey || sourceKey(corrected);
+    state.approvedCorrectionMap[corrected.sourceKey] = corrected;
+  }
+
+  if (fixStatus === "cancel") {
+    if (req.sourceKey) delete state.approvedCorrectionMap[req.sourceKey];
+    if (base) {
+      state.timecards = state.timecards.filter((r) => (r.sourceKey || sourceKey(r)) !== (req.sourceKey || ""));
+    }
+  } else if (base) {
     state.timecards = state.timecards.map((r) => ((r.sourceKey || sourceKey(r)) === req.sourceKey ? corrected : r));
-  } else {
+  } else if (corrected) {
     state.timecards.push(corrected);
   }
+
   state.auditTrail.push({
     at: new Date().toLocaleString("ja-JP"),
     employee: req.employee,
     date: req.date,
-    diff: `${req.currentCheckIn}→${req.newCheckIn} / ${req.currentCheckOut}→${req.newCheckOut}`,
-    reason: req.reason,
+    diff: buildCorrectionDiffText(req.currentCheckIn, req.currentCheckOut, nextCheckIn, nextCheckOut, fixStatus),
+    reason: payload.reason,
     decision: "承認",
   });
   state.auditTrail = state.auditTrail.slice(-500);
@@ -1567,7 +1719,7 @@ function rejectCorrection(id) {
       at: new Date().toLocaleString("ja-JP"),
       employee: req.employee,
       date: req.date,
-      diff: `${req.currentCheckIn}→${req.newCheckIn} / ${req.currentCheckOut}→${req.newCheckOut}`,
+      diff: buildCorrectionDiffText(req.currentCheckIn, req.currentCheckOut, req.newCheckIn, req.newCheckOut, req.fixStatus || "normal"),
       reason: req.reason,
       decision: "却下",
     });
@@ -1594,10 +1746,17 @@ function applySnapshot(snapshot) {
     state.timecards = applyApprovedCorrections(snapshot.timecards);
   }
   if (Array.isArray(snapshot.lineCorrectionRequests) && snapshot.lineCorrectionRequests.length) {
+    const existingLineReqMap = new Map(
+      state.pendingCorrections
+        .filter((x) => x.requestType === "line_request")
+        .map((x) => [x.id, x])
+    );
     const pending = snapshot.lineCorrectionRequests
       .filter((r) => r.status === "申請中")
       .map((r) => ({
         id: `line-${r.id}`,
+        requestedAt: (r.createdAt || "").replace("T", " ").slice(0, 16),
+        requestedBy: r.employee || "LINEユーザー",
         sourceKey: "",
         date: (r.createdAt || "").slice(0, 10),
         employee: r.employee || "未設定",
@@ -1607,9 +1766,11 @@ function applySnapshot(snapshot) {
         newCheckIn: "-",
         newCheckOut: "-",
         newBreakMin: 0,
+        fixStatus: "normal",
         reason: `LINE修正依頼: ${r.message || ""}`,
         requestType: "line_request",
-      }));
+      }))
+      .map((r) => ({ ...r, ...(existingLineReqMap.get(r.id) || {}) }));
     const preserved = state.pendingCorrections.filter((x) => x.requestType !== "line_request");
     state.pendingCorrections = [...preserved, ...pending];
   }
@@ -2516,13 +2677,47 @@ function bindEvents() {
   document.getElementById("pendingApprovalBody")?.addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
-    const a = target.getAttribute("data-approve");
-    if (a) {
-      approveCorrection(a);
+    const correctionId = target.getAttribute("data-open-correction");
+    if (!correctionId) return;
+    switchView("corrections");
+    const rowEl = document.getElementById(`correction-row-${correctionId}`);
+    if (rowEl instanceof HTMLElement) rowEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+
+  document.getElementById("correctionDeskBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const approveId = target.getAttribute("data-desk-approve");
+    if (approveId) {
+      const override = collectCorrectionOverride(approveId);
+      if (!override) return;
+      approveCorrection(approveId, override);
       return;
     }
-    const r = target.getAttribute("data-reject");
-    if (r) rejectCorrection(r);
+    const rejectId = target.getAttribute("data-desk-reject");
+    if (rejectId) {
+      const override = collectCorrectionOverride(rejectId);
+      if (override) {
+        const req = state.pendingCorrections.find((p) => p.id === rejectId);
+        if (req) req.reason = override.reason || req.reason;
+      }
+      rejectCorrection(rejectId);
+    }
+  });
+
+  document.getElementById("correctionDeskBody")?.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const id = target.getAttribute("data-correction-id");
+    const field = target.getAttribute("data-correction-field");
+    if (!id || !field) return;
+    const req = state.pendingCorrections.find((p) => p.id === id);
+    if (!req) return;
+    if (field === "status") req.fixStatus = normalizeText(target.value || "normal");
+    if (field === "checkin") req.newCheckIn = normalizeText(target.value || "");
+    if (field === "checkout") req.newCheckOut = normalizeText(target.value || "");
+    if (field === "reason") req.reason = normalizeText(target.value || req.reason || "");
+    persist();
   });
 
   bindMasterEvents();
