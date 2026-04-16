@@ -20,11 +20,11 @@ const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
 
 const defaultEmployees = [
-  { id: "e1", code: "E001", name: "田中", active: true },
-  { id: "e2", code: "E002", name: "佐藤", active: true },
-  { id: "e3", code: "E003", name: "鈴木", active: true },
-  { id: "e4", code: "E004", name: "高橋", active: true },
-  { id: "e5", code: "E005", name: "伊藤", active: true },
+  { id: "e1", code: "E001", name: "田中", active: true, workStart: "09:00", workEnd: "17:00" },
+  { id: "e2", code: "E002", name: "佐藤", active: true, workStart: "09:00", workEnd: "17:00" },
+  { id: "e3", code: "E003", name: "鈴木", active: true, workStart: "09:00", workEnd: "17:00" },
+  { id: "e4", code: "E004", name: "高橋", active: true, workStart: "09:00", workEnd: "17:00" },
+  { id: "e5", code: "E005", name: "伊藤", active: true, workStart: "09:00", workEnd: "17:00" },
 ];
 
 const defaultRoutes = [
@@ -83,6 +83,17 @@ const viewTitle = {
   leaves: "休暇申請管理",
   lineusers: "LINEユーザー紐付け",
 };
+
+function normalizeEmployeeRows() {
+  state.employees = (state.employees || []).map((e, i) => ({
+    id: e.id || uid(`e${i + 1}`),
+    code: normalizeText(e.code || `E${String(i + 1).padStart(3, "0")}`),
+    name: normalizeText(e.name || `社員${i + 1}`),
+    active: e.active !== false,
+    workStart: normalizeText(e.workStart || "09:00"),
+    workEnd: normalizeText(e.workEnd || "17:00"),
+  }));
+}
 
 function persist() {
   localStorage.setItem(LOGS_KEY, JSON.stringify(state.logs));
@@ -149,6 +160,22 @@ function activeVehicles() {
 function getEmployeeCode(name) {
   const row = state.employees.find((e) => e.name === name);
   return row ? row.code : "";
+}
+
+function getEmployeeRule(name) {
+  const row = state.employees.find((e) => e.name === name);
+  return {
+    workStart: normalizeText(row?.workStart || "09:00"),
+    workEnd: normalizeText(row?.workEnd || "17:00"),
+  };
+}
+
+function computeScheduledMinutes(workStart, workEnd) {
+  const s = minutesFromHHMM(workStart);
+  const e = minutesFromHHMM(workEnd);
+  if (s === null || e === null) return 8 * 60;
+  const diff = e >= s ? e - s : e + 24 * 60 - s;
+  return Math.max(60, diff);
 }
 
 function getVehicleById(id) {
@@ -404,8 +431,9 @@ function renameRouteReferences(oldRoute, newRoute) {
   });
 }
 
-function isPayrollEligibleByWindow(minutes) {
-  return Number(minutes) >= 8 * 60 + 50 && Number(minutes) <= 9 * 60 + 10;
+function isPayrollEligibleByWindow(minutes, scheduledStartMinutes = null) {
+  const base = Number.isFinite(Number(scheduledStartMinutes)) ? Number(scheduledStartMinutes) : 9 * 60;
+  return Number(minutes) >= base - 10 && Number(minutes) <= base + 10;
 }
 
 function isPayrollEligibleRow(row) {
@@ -415,44 +443,40 @@ function isPayrollEligibleRow(row) {
   return isPayrollEligibleByWindow(m);
 }
 
-function formatRouteGeo(route) {
-  const placeName = normalizeText(route?.geoPlaceName || "");
-  const lat = Number(route?.geoLat);
-  const lng = Number(route?.geoLng);
-  const radius = Number(route?.geoRadiusM || 300);
+function formatGeoDisplay(placeNameRaw, latRaw, lngRaw, radiusRaw) {
+  const placeName = normalizeText(placeNameRaw || "");
+  const lat = Number(latRaw);
+  const lng = Number(lngRaw);
+  const radius = Number(radiusRaw || 300);
   if (placeName) return `${placeName} / 半径${radius}m`;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
-  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / 半径${radius}m`;
+  if (Number.isFinite(lat) && Number.isFinite(lng)) return `位置設定済み / 半径${radius}m`;
+  return "未設定";
+}
+
+function formatRouteGeo(route) {
+  return formatGeoDisplay(route?.geoPlaceName, route?.geoLat, route?.geoLng, route?.geoRadiusM);
 }
 
 function formatGeoCell(row) {
-  const placeName = normalizeText(row?.geoPlaceName || row?.startGeoPlaceName || "");
-  const lat = Number(row?.geoLat);
-  const lng = Number(row?.geoLng);
-  const radius = Number(row?.geoRadiusM || 300);
-  if (placeName) return `${placeName} / 半径${radius}m`;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
-  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / 半径${radius}m`;
+  return formatGeoDisplay(
+    row?.geoPlaceName || row?.startGeoPlaceName,
+    row?.geoLat,
+    row?.geoLng,
+    row?.geoRadiusM
+  );
 }
 
 function formatStartGeoCell(row) {
-  const placeName = normalizeText(row?.startGeoPlaceName || row?.geoPlaceName || "");
-  const lat = Number(row?.startGeoLat ?? row?.geoLat);
-  const lng = Number(row?.startGeoLng ?? row?.geoLng);
-  const radius = Number(row?.startGeoRadiusM ?? row?.geoRadiusM ?? 300);
-  if (placeName) return `${placeName} / 半径${radius}m`;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
-  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / 半径${radius}m`;
+  return formatGeoDisplay(
+    row?.startGeoPlaceName || row?.geoPlaceName,
+    row?.startGeoLat ?? row?.geoLat,
+    row?.startGeoLng ?? row?.geoLng,
+    row?.startGeoRadiusM ?? row?.geoRadiusM
+  );
 }
 
 function formatEndGeoCell(row) {
-  const placeName = normalizeText(row?.endGeoPlaceName || "");
-  const lat = Number(row?.endGeoLat);
-  const lng = Number(row?.endGeoLng);
-  const radius = Number(row?.endGeoRadiusM || 300);
-  if (placeName) return `${placeName} / 半径${radius}m`;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "未設定";
-  return `${lat.toFixed(5)}, ${lng.toFixed(5)} / 半径${radius}m`;
+  return formatGeoDisplay(row?.endGeoPlaceName, row?.endGeoLat, row?.endGeoLng, row?.endGeoRadiusM);
 }
 
 function sourceKey(row) {
@@ -971,6 +995,7 @@ function renderCorrectionDesk() {
   body.innerHTML = state.pendingCorrections
     .map((req) => {
       const fixStatus = req.fixStatus || "normal";
+      const isOvertimeReview = req.requestType === "overtime_review";
       const inVal = isValidTimeText(req.newCheckIn) ? req.newCheckIn : "";
       const outVal = isValidTimeText(req.newCheckOut) ? req.newCheckOut : "";
       const requestedAt = req.requestedAt || "-";
@@ -982,19 +1007,19 @@ function renderCorrectionDesk() {
         <td>${req.date || "-"}</td>
         <td>${req.currentCheckIn || "-"} / ${req.currentCheckOut || "-"}${req.site ? `<br><span class="section-lead">${siteLabel}</span>` : ""}</td>
         <td>
-          <select data-correction-field="status" data-correction-id="${req.id}">
+          <select data-correction-field="status" data-correction-id="${req.id}" ${isOvertimeReview ? "disabled" : ""}>
             <option value="normal" ${fixStatus === "normal" ? "selected" : ""}>通常（出退勤）</option>
             <option value="checkin_only" ${fixStatus === "checkin_only" ? "selected" : ""}>出勤に修正</option>
             <option value="checkout_only" ${fixStatus === "checkout_only" ? "selected" : ""}>退勤に修正</option>
             <option value="cancel" ${fixStatus === "cancel" ? "selected" : ""}>打刻取消</option>
           </select>
         </td>
-        <td><input type="time" data-correction-field="checkin" data-correction-id="${req.id}" value="${inVal}" /></td>
-        <td><input type="time" data-correction-field="checkout" data-correction-id="${req.id}" value="${outVal}" /></td>
-        <td><input type="text" data-correction-field="reason" data-correction-id="${req.id}" value="${escapeHtml(req.reason || "")}" placeholder="理由を入力" /></td>
+        <td><input type="time" data-correction-field="checkin" data-correction-id="${req.id}" value="${inVal}" ${isOvertimeReview ? "disabled" : ""} /></td>
+        <td><input type="time" data-correction-field="checkout" data-correction-id="${req.id}" value="${outVal}" ${isOvertimeReview ? "disabled" : ""} /></td>
+        <td><input type="text" data-correction-field="reason" data-correction-id="${req.id}" value="${escapeHtml(req.reason || "")}" placeholder="理由を入力" ${isOvertimeReview ? "disabled" : ""} /></td>
         <td>
-          <button class="btn" data-desk-approve="${req.id}">承認</button>
-          <button class="btn btn-ghost" data-desk-reject="${req.id}">却下</button>
+          <button class="btn" data-desk-approve="${req.id}">${isOvertimeReview ? "承認（実績）" : "承認"}</button>
+          <button class="btn btn-ghost" data-desk-reject="${req.id}">${isOvertimeReview ? "却下（予定終業に修正）" : "却下"}</button>
         </td>
       </tr>`;
     })
@@ -1246,6 +1271,7 @@ function renderMasters() {
         (e) => `<tr>
       <td>${e.code}</td>
       <td>${e.name}</td>
+      <td>${normalizeText(e.workStart || "09:00")} - ${normalizeText(e.workEnd || "17:00")}</td>
       <td><span class="badge ${e.active ? "ok" : "warn"}">${e.active ? "有効" : "無効"}</span></td>
       <td>
         <button class="btn btn-ghost" data-edit-emp="${e.id}">編集</button>
@@ -1317,6 +1343,7 @@ function renderMasters() {
 }
 
 function renderAll() {
+  mergeOvertimePendingRequests();
   populateSelectors();
   renderDashboard();
   renderGpsStatus();
@@ -1478,16 +1505,27 @@ function exportAuditPackage() {
   toCsv([checkHeader, ...checkBody], `liive_close_checklist_${month}_${ts}.csv`);
 }
 
-function recalcByTimes(date, checkIn, checkOut, breakMin) {
+function recalcByTimes(date, checkIn, checkOut, breakMin, employeeName = "") {
   const start = new Date(`${date}T${checkIn}:00`);
   const end = new Date(`${date}T${checkOut}:00`);
   const diffHours = Math.max(0, (end.getTime() - start.getTime()) / 3600000 - breakMin / 60);
   const hours = Number(Math.max(0.5, diffHours).toFixed(1));
+  const rule = getEmployeeRule(employeeName);
+  const startMin = start.getHours() * 60 + start.getMinutes();
+  const endMin = end.getHours() * 60 + end.getMinutes();
+  const scheduledMinutes = computeScheduledMinutes(rule.workStart, rule.workEnd);
+  const scheduledHours = Number((scheduledMinutes / 60).toFixed(1));
+  const scheduledEndMin = minutesFromHHMM(rule.workEnd);
+  const exceededScheduledEnd = scheduledEndMin !== null ? endMin > scheduledEndMin : false;
   return {
     hours,
-    overtime: Number(Math.max(0, hours - 8).toFixed(1)),
-    isLate: start.getHours() * 60 + start.getMinutes() > 9 * 60,
-    payrollEligible: isPayrollEligibleByWindow(start.getHours() * 60 + start.getMinutes()),
+    overtime: Number(Math.max(0, hours - scheduledHours).toFixed(1)),
+    isLate: minutesFromHHMM(rule.workStart) !== null ? startMin > minutesFromHHMM(rule.workStart) : startMin > 9 * 60,
+    payrollEligible: isPayrollEligibleByWindow(startMin, minutesFromHHMM(rule.workStart)),
+    scheduledStart: rule.workStart,
+    scheduledEnd: rule.workEnd,
+    scheduledHours,
+    exceededScheduledEnd,
   };
 }
 
@@ -1592,18 +1630,68 @@ function collectCorrectionOverride(id) {
 }
 
 function parseShiftCsv(text) {
-  return String(text || "")
+  const lines = String(text || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean)
+    .filter(Boolean);
+  if (lines.length < 2) return [];
+
+  const delim = lines[0].includes("\t") ? "\t" : ",";
+  const splitLine = (line) => line.split(delim).map((v) => v.replace(/^"|"$/g, "").trim());
+  const header = splitLine(lines[0]).map((h) => normalizeText(h).toLowerCase());
+  const idx = {
+    date: header.findIndex((h) => ["date", "日付", "対象日"].includes(h)),
+    employee: header.findIndex((h) => ["employee", "社員", "社員名"].includes(h)),
+    start: header.findIndex((h) => ["start", "開始", "開始時刻", "予定開始"].includes(h)),
+    end: header.findIndex((h) => ["end", "終了", "終了時刻", "予定終了"].includes(h)),
+    route: header.findIndex((h) => ["route", "現場", "ルート", "予定現場"].includes(h)),
+  };
+  const fallback = {
+    date: idx.date >= 0 ? idx.date : 0,
+    employee: idx.employee >= 0 ? idx.employee : 1,
+    start: idx.start >= 0 ? idx.start : 2,
+    end: idx.end >= 0 ? idx.end : 3,
+    route: idx.route >= 0 ? idx.route : 4,
+  };
+
+  return lines
     .slice(1)
-    .map((line) => line.split(",").map((v) => v.replace(/^"|"$/g, "").trim()))
+    .map((line) => splitLine(line))
     .map((cols) => ({
-      date: cols[0] || "",
-      employee: cols[1] || "",
-      start: cols[2] || "",
-      end: cols[3] || "",
-      route: cols[4] || "",
+      date: cols[fallback.date] || "",
+      employee: cols[fallback.employee] || "",
+      start: cols[fallback.start] || "",
+      end: cols[fallback.end] || "",
+      route: cols[fallback.route] || "",
+    }))
+    .filter((row) => row.date && row.employee && row.start && row.end && row.route);
+}
+
+function parseShiftXlsxRows(rows2d) {
+  if (!Array.isArray(rows2d) || rows2d.length < 2) return [];
+  const header = (rows2d[0] || []).map((h) => normalizeText(h).toLowerCase());
+  const idx = {
+    date: header.findIndex((h) => ["date", "日付", "対象日"].includes(h)),
+    employee: header.findIndex((h) => ["employee", "社員", "社員名"].includes(h)),
+    start: header.findIndex((h) => ["start", "開始", "開始時刻", "予定開始"].includes(h)),
+    end: header.findIndex((h) => ["end", "終了", "終了時刻", "予定終了"].includes(h)),
+    route: header.findIndex((h) => ["route", "現場", "ルート", "予定現場"].includes(h)),
+  };
+  const fallback = {
+    date: idx.date >= 0 ? idx.date : 0,
+    employee: idx.employee >= 0 ? idx.employee : 1,
+    start: idx.start >= 0 ? idx.start : 2,
+    end: idx.end >= 0 ? idx.end : 3,
+    route: idx.route >= 0 ? idx.route : 4,
+  };
+  return rows2d
+    .slice(1)
+    .map((cols) => ({
+      date: normalizeText(cols?.[fallback.date] || ""),
+      employee: normalizeText(cols?.[fallback.employee] || ""),
+      start: normalizeText(cols?.[fallback.start] || ""),
+      end: normalizeText(cols?.[fallback.end] || ""),
+      route: normalizeText(cols?.[fallback.route] || ""),
     }))
     .filter((row) => row.date && row.employee && row.start && row.end && row.route);
 }
@@ -1665,12 +1753,16 @@ function approveCorrection(id, override = null) {
   if (fixStatus !== "cancel") {
     const recalc =
       fixStatus === "normal"
-        ? recalcByTimes(req.date, nextCheckIn, nextCheckOut, nextBreakMin)
+        ? recalcByTimes(req.date, nextCheckIn, nextCheckOut, nextBreakMin, req.employee)
         : {
             hours: 0,
             overtime: 0,
             isLate: false,
             payrollEligible: false,
+            scheduledStart: getEmployeeRule(req.employee).workStart,
+            scheduledEnd: getEmployeeRule(req.employee).workEnd,
+            scheduledHours: Number((computeScheduledMinutes(getEmployeeRule(req.employee).workStart, getEmployeeRule(req.employee).workEnd) / 60).toFixed(1)),
+            exceededScheduledEnd: false,
           };
 
     corrected = {
@@ -1686,10 +1778,14 @@ function approveCorrection(id, override = null) {
       isLate: recalc.isLate,
       payrollEligible: recalc.payrollEligible,
       payrollRule: recalc.payrollEligible ? "normal_window" : "outside_window",
+      scheduledStart: recalc.scheduledStart,
+      scheduledEnd: recalc.scheduledEnd,
+      scheduledHours: recalc.scheduledHours,
       corrected: true,
       correctionReason: payload.reason,
       correctionStatus: fixStatus,
       correctedAt: new Date().toISOString(),
+      overtimeApprovalStatus: fixStatus === "normal" && recalc.exceededScheduledEnd ? "pending" : "none",
     };
     corrected.sourceKey = req.sourceKey || sourceKey(corrected);
     state.approvedCorrectionMap[corrected.sourceKey] = corrected;
@@ -1784,6 +1880,86 @@ function applySnapshot(snapshot) {
   if (snapshot.lineSync) {
     document.getElementById("syncStatus").textContent = "PCへ反映済み";
   }
+  mergeOvertimePendingRequests();
+}
+
+function mergeOvertimePendingRequests() {
+  const overtimeMap = new Map(
+    state.timecards
+      .filter((row) => row.overtimeApprovalStatus === "pending")
+      .map((row) => {
+        const key = row.sourceKey || sourceKey(row);
+        const request = {
+          id: `ot-${key}`,
+          requestedAt: row.overtimeRequestedAt ? new Date(row.overtimeRequestedAt).toLocaleString("ja-JP") : "-",
+          requestedBy: row.employee || "システム",
+          sourceKey: key,
+          date: row.date || "",
+          employee: row.employee || "",
+          site: row.site || "",
+          currentCheckIn: row.checkIn || "-",
+          currentCheckOut: row.checkOut || "-",
+          newCheckIn: row.checkIn || "-",
+          newCheckOut: row.checkOut || "-",
+          newBreakMin: Number(row.breakMin || 0),
+          fixStatus: "normal",
+          reason: `残業承認待ち（実績 ${Number(row.overtime || 0).toFixed(1)}h）`,
+          requestType: "overtime_review",
+        };
+        return [request.id, request];
+      })
+  );
+
+  const preserved = state.pendingCorrections.filter((row) => row.requestType !== "overtime_review");
+  state.pendingCorrections = [...preserved, ...Array.from(overtimeMap.values())];
+}
+
+async function resolveOvertimeReview(req, approve) {
+  if (!req || !req.sourceKey) return;
+  if (API_ENABLED) {
+    try {
+      const data = await apiRequest("/api/timecards/overtime-review", {
+        method: "POST",
+        body: JSON.stringify({
+          sourceKey: req.sourceKey,
+          action: approve ? "approve" : "reject",
+          reason: req.reason || "",
+        }),
+      });
+      if (data?.ok && data.snapshot) {
+        applySnapshot(data.snapshot);
+        renderAll();
+        return;
+      }
+    } catch (_e) {}
+  }
+
+  const row = state.timecards.find((x) => (x.sourceKey || sourceKey(x)) === req.sourceKey);
+  if (!row) return;
+
+  if (approve) {
+    row.overtimeApprovalStatus = "approved";
+    row.overtimeApprovedAt = new Date().toISOString();
+  } else {
+    const scheduledEnd = normalizeText(row.scheduledEnd || "17:00");
+    if (isValidTimeText(scheduledEnd) && isValidTimeText(row.checkIn || "")) {
+      const recalc = recalcByTimes(row.date, row.checkIn, scheduledEnd, Number(row.breakMin || 0), row.employee);
+      row.checkOut = scheduledEnd;
+      row.hours = recalc.hours;
+      row.overtime = recalc.overtime;
+      row.isLate = recalc.isLate;
+      row.payrollEligible = recalc.payrollEligible;
+      row.payrollRule = recalc.payrollEligible ? "normal_window" : "outside_window";
+      row.scheduledStart = recalc.scheduledStart;
+      row.scheduledEnd = recalc.scheduledEnd;
+      row.scheduledHours = recalc.scheduledHours;
+    }
+    row.overtimeApprovalStatus = "rejected";
+    row.overtimeRejectedAt = new Date().toISOString();
+  }
+  row.sourceKey = sourceKey(row);
+  mergeOvertimePendingRequests();
+  renderAll();
 }
 
 function actionLabel(action) {
@@ -1831,10 +2007,17 @@ function recordLocalAction(employee, site, action) {
     const checkInAt = new Date(current.checkInISO);
     const rawHours = (now.getTime() - checkInAt.getTime()) / 3600000;
     const hours = Math.max(0.5, Number((rawHours - breakMin / 60).toFixed(1)));
-    const overtime = Math.max(0, Number((hours - 8).toFixed(1)));
-    const isLate = checkInAt.getHours() * 60 + checkInAt.getMinutes() > 9 * 60;
-
+    const rule = getEmployeeRule(employee);
+    const scheduledMinutes = computeScheduledMinutes(rule.workStart, rule.workEnd);
+    const scheduledHours = Number((scheduledMinutes / 60).toFixed(1));
+    const overtime = Math.max(0, Number((hours - scheduledHours).toFixed(1)));
     const checkInMin = checkInAt.getHours() * 60 + checkInAt.getMinutes();
+    const checkOutMin = now.getHours() * 60 + now.getMinutes();
+    const scheduledStartMin = minutesFromHHMM(rule.workStart);
+    const scheduledEndMin = minutesFromHHMM(rule.workEnd);
+    const isLate = scheduledStartMin !== null ? checkInMin > scheduledStartMin : checkInMin > 9 * 60;
+    const exceededScheduledEnd = scheduledEndMin !== null ? checkOutMin > scheduledEndMin : false;
+
     const row = {
       date,
       employee,
@@ -1845,8 +2028,13 @@ function recordLocalAction(employee, site, action) {
       breakMin,
       overtime,
       isLate,
-      payrollEligible: isPayrollEligibleByWindow(checkInMin),
-      payrollRule: isPayrollEligibleByWindow(checkInMin) ? "normal_window" : "outside_window",
+      payrollEligible: isPayrollEligibleByWindow(checkInMin, scheduledStartMin),
+      payrollRule: isPayrollEligibleByWindow(checkInMin, scheduledStartMin) ? "normal_window" : "outside_window",
+      scheduledStart: rule.workStart,
+      scheduledEnd: rule.workEnd,
+      scheduledHours,
+      overtimeApprovalStatus: exceededScheduledEnd ? "pending" : "none",
+      overtimeRequestedAt: exceededScheduledEnd ? now.toISOString() : null,
     };
     row.sourceKey = sourceKey(row);
     state.timecards.push(row);
@@ -1971,6 +2159,25 @@ async function syncShiftPlansToServer() {
   } catch (_e) {}
 }
 
+async function syncEmployeesToServer() {
+  if (!API_ENABLED) return;
+  try {
+    await apiRequest("/api/employees/sync", {
+      method: "POST",
+      body: JSON.stringify({
+        employees: state.employees.map((e) => ({
+          id: e.id,
+          code: e.code,
+          name: e.name,
+          active: !!e.active,
+          workStart: normalizeText(e.workStart || "09:00"),
+          workEnd: normalizeText(e.workEnd || "17:00"),
+        })),
+      }),
+    });
+  } catch (_e) {}
+}
+
 async function sendShiftNow(targetDate = "") {
   if (!API_ENABLED) {
     alert("http/https環境で実行してください（file://は不可）");
@@ -2005,9 +2212,34 @@ async function sendShiftOne(targetDate = "", employee = "") {
     });
     if (status) {
       status.textContent = `個別配信完了: ${employee} / 対象${data?.targetDate || "-"} / 送信${data?.sentCount || 0}件`;
+      if ((data?.sentCount || 0) < 1 && data?.reason) {
+        status.textContent += ` / 理由: ${data.reason}`;
+      }
     }
   } catch (_e) {
     if (status) status.textContent = "個別配信失敗";
+  }
+}
+
+async function sendShiftRange(targetStartDate = "", targetEndDate = "", employee = "") {
+  if (!API_ENABLED) {
+    alert("http/https環境で実行してください（file://は不可）");
+    return;
+  }
+  const status = document.getElementById("shiftDeliveryStatus");
+  if (status) status.textContent = employee ? "個別期間配信中..." : "期間配信中...";
+  try {
+    const data = await apiRequest("/api/shift/deliver-range", {
+      method: "POST",
+      body: JSON.stringify({ targetStartDate, targetEndDate, employee }),
+    });
+    if (status) {
+      status.textContent = employee
+        ? `個別期間配信完了: ${employee} / ${data?.targetStartDate || "-"}〜${data?.targetEndDate || "-"} / 送信${data?.sentCount || 0}件${(data?.sentCount || 0) < 1 && data?.reason ? ` / 理由: ${data.reason}` : ""}`
+        : `期間配信完了: ${data?.targetStartDate || "-"}〜${data?.targetEndDate || "-"} / 送信${data?.sentCount || 0}件 / スキップ${data?.skippedCount || 0}件`;
+    }
+  } catch (_e) {
+    if (status) status.textContent = "期間配信失敗";
   }
 }
 
@@ -2100,7 +2332,12 @@ function bindMasterEvents() {
     e.preventDefault();
     const code = normalizeText(document.getElementById("employeeCode").value);
     const name = normalizeText(document.getElementById("employeeName").value);
-    if (!code || !name) return;
+    const workStart = normalizeText(document.getElementById("employeeWorkStart")?.value || "09:00");
+    const workEnd = normalizeText(document.getElementById("employeeWorkEnd")?.value || "17:00");
+    if (!code || !name || !isValidTimeText(workStart) || !isValidTimeText(workEnd)) {
+      alert("社員コード・社員名・標準出勤/退勤時刻を入力してください。");
+      return;
+    }
     if (state.employees.some((x) => normalizeText(x.code) === code)) {
       alert("同じ社員コードがあります");
       return;
@@ -2109,10 +2346,15 @@ function bindMasterEvents() {
       alert("同じ社員名があります");
       return;
     }
-    state.employees.push({ id: uid("e"), code, name, active: true });
+    state.employees.push({ id: uid("e"), code, name, active: true, workStart, workEnd });
     document.getElementById("employeeCode").value = "";
     document.getElementById("employeeName").value = "";
+    const ws = document.getElementById("employeeWorkStart");
+    const we = document.getElementById("employeeWorkEnd");
+    if (ws) ws.value = "09:00";
+    if (we) we.value = "17:00";
     renderAll();
+    syncEmployeesToServer();
   });
 
   document.getElementById("routeForm")?.addEventListener("submit", (e) => {
@@ -2218,6 +2460,7 @@ function bindMasterEvents() {
       if (!row) return;
       row.active = !row.active;
       renderAll();
+      syncEmployeesToServer();
       return;
     }
     const editId = target.getAttribute("data-edit-emp");
@@ -2226,7 +2469,9 @@ function bindMasterEvents() {
       if (!row) return;
       const nextCode = normalizeText(window.prompt("社員コードを変更", row.code));
       const nextName = normalizeText(window.prompt("社員名を変更", row.name));
-      if (!nextCode || !nextName) return;
+      const nextStart = normalizeText(window.prompt("標準出勤時刻を変更 (HH:MM)", row.workStart || "09:00"));
+      const nextEnd = normalizeText(window.prompt("標準退勤時刻を変更 (HH:MM)", row.workEnd || "17:00"));
+      if (!nextCode || !nextName || !isValidTimeText(nextStart) || !isValidTimeText(nextEnd)) return;
       if (state.employees.some((x) => x.id !== row.id && normalizeText(x.code) === nextCode)) {
         alert("同じ社員コードがあります");
         return;
@@ -2238,9 +2483,12 @@ function bindMasterEvents() {
       const beforeName = row.name;
       row.code = nextCode;
       row.name = nextName;
+      row.workStart = nextStart;
+      row.workEnd = nextEnd;
       renameEmployeeReferences(beforeName, row.name);
       renderAll();
       renameLineMappings(beforeName, row.name, row.id);
+      syncEmployeesToServer();
       return;
     }
     const deleteId = target.getAttribute("data-delete-emp");
@@ -2262,6 +2510,7 @@ function bindMasterEvents() {
       }
       renderAll();
       syncShiftPlansToServer();
+      syncEmployeesToServer();
     }
   });
 
@@ -2514,14 +2763,57 @@ function bindMasterEvents() {
     sendShiftOne(targetDate, employee);
   });
 
+  document.getElementById("sendShiftRangeBtn")?.addEventListener("click", () => {
+    const startDate = document.getElementById("shiftRangeStartDate")?.value || "";
+    const endDate = document.getElementById("shiftRangeEndDate")?.value || "";
+    if (!startDate || !endDate) {
+      alert("配信期間（開始日・終了日）を入力してください。");
+      return;
+    }
+    sendShiftRange(startDate, endDate, "");
+  });
+
+  document.getElementById("sendShiftRangeOneBtn")?.addEventListener("click", () => {
+    const employee = document.getElementById("shiftEmployee")?.value || "";
+    const startDate = document.getElementById("shiftRangeStartDate")?.value || "";
+    const endDate = document.getElementById("shiftRangeEndDate")?.value || "";
+    if (!employee || !startDate || !endDate) {
+      alert("社員・開始日・終了日を選択してください。");
+      return;
+    }
+    sendShiftRange(startDate, endDate, employee);
+  });
+
   document.getElementById("shiftCsvInput")?.addEventListener("change", async (e) => {
     const input = e.target;
     if (!(input instanceof HTMLInputElement) || !input.files?.length) return;
     const file = input.files[0];
-    const text = await file.text();
-    const rows = parseShiftCsv(text);
+    const lowerName = String(file.name || "").toLowerCase();
+    let rows = [];
+    if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
+      const xlsx = window.XLSX;
+      if (!xlsx) {
+        alert("Excel取込ライブラリの読込に失敗しました。CSV（UTF-8）で取り込んでください。");
+        input.value = "";
+        return;
+      }
+      const ab = await file.arrayBuffer();
+      const wb = xlsx.read(ab, { type: "array" });
+      const firstSheetName = wb.SheetNames?.[0];
+      if (!firstSheetName) {
+        alert("Excelシートを読み取れませんでした。");
+        input.value = "";
+        return;
+      }
+      const ws = wb.Sheets[firstSheetName];
+      const rows2d = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      rows = parseShiftXlsxRows(rows2d);
+    } else {
+      const text = await file.text();
+      rows = parseShiftCsv(text);
+    }
     if (!rows.length) {
-      alert("CSVの取り込み行がありません。列は date,employee,start,end,route を使用してください。");
+      alert("取り込み行がありません。列は date/employee/start/end/route（または 日付/社員名/開始時刻/終了時刻/現場）を使用してください。");
       return;
     }
     rows.forEach((row) => {
@@ -2558,6 +2850,14 @@ function bindEvents() {
 
   const shiftDate = document.getElementById("shiftDate");
   if (shiftDate) shiftDate.value = new Date().toISOString().slice(0, 10);
+  const shiftRangeStartDate = document.getElementById("shiftRangeStartDate");
+  if (shiftRangeStartDate) shiftRangeStartDate.value = new Date().toISOString().slice(0, 10);
+  const shiftRangeEndDate = document.getElementById("shiftRangeEndDate");
+  if (shiftRangeEndDate) {
+    const plus7 = new Date();
+    plus7.setDate(plus7.getDate() + 6);
+    shiftRangeEndDate.value = plus7.toISOString().slice(0, 10);
+  }
   const leaveDate = document.getElementById("leaveDate");
   if (leaveDate) leaveDate.value = new Date().toISOString().slice(0, 10);
 
@@ -2696,6 +2996,11 @@ function bindEvents() {
     if (!(target instanceof HTMLElement)) return;
     const approveId = target.getAttribute("data-desk-approve");
     if (approveId) {
+      const req = state.pendingCorrections.find((p) => p.id === approveId);
+      if (req?.requestType === "overtime_review") {
+        resolveOvertimeReview(req, true);
+        return;
+      }
       const override = collectCorrectionOverride(approveId);
       if (!override) return;
       approveCorrection(approveId, override);
@@ -2703,6 +3008,11 @@ function bindEvents() {
     }
     const rejectId = target.getAttribute("data-desk-reject");
     if (rejectId) {
+      const req = state.pendingCorrections.find((p) => p.id === rejectId);
+      if (req?.requestType === "overtime_review") {
+        resolveOvertimeReview(req, false);
+        return;
+      }
       const override = collectCorrectionOverride(rejectId);
       if (override) {
         const req = state.pendingCorrections.find((p) => p.id === rejectId);
@@ -2731,6 +3041,7 @@ function bindEvents() {
 }
 
 function init() {
+  normalizeEmployeeRows();
   applyTheme(state.theme);
   bindEvents();
   renderAll();
@@ -2739,6 +3050,7 @@ function init() {
     fetchLineUsers();
     fetchShiftDeliveryStatus();
     syncShiftPlansToServer();
+    syncEmployeesToServer();
     setInterval(pullSnapshot, API_POLL_MS);
     setInterval(fetchLineUsers, API_POLL_MS * 2);
     setInterval(fetchShiftDeliveryStatus, API_POLL_MS * 6);

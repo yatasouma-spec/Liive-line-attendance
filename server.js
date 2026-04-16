@@ -151,8 +151,23 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       continue;
     }
     if (text.includes("明日シフト確認") || text.includes("シフト確認")) {
-      const targetDate = getJstDateOffset(1);
-      const message = buildShiftMessageForEmployee(db, targetDate, employee);
+      const startDate = getJstDateOffset(1);
+      const endDate = getJstDateOffset(7);
+      const message = buildShiftMessageForEmployeeRange(db, startDate, endDate, employee);
+      await sendLineReply(event.replyToken, message, { withQuickReply: true });
+      continue;
+    }
+    if (text.includes("今週シフト")) {
+      const startDate = getJstDateOffset(1);
+      const endDate = getJstDateOffset(7);
+      const message = buildShiftMessageForEmployeeRange(db, startDate, endDate, employee);
+      await sendLineReply(event.replyToken, message, { withQuickReply: true });
+      continue;
+    }
+    if (text.includes("今月シフト")) {
+      const startDate = getJstDateOffset(1);
+      const endDate = getJstDateOffset(30);
+      const message = buildShiftMessageForEmployeeRange(db, startDate, endDate, employee);
       await sendLineReply(event.replyToken, message, { withQuickReply: true });
       continue;
     }
@@ -309,6 +324,25 @@ app.get("/api/bootstrap", (_req, res) => {
     timecards: db.timecards.slice(-1000),
     lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
   });
+});
+
+app.post("/api/employees/sync", (req, res) => {
+  const employees = Array.isArray(req.body?.employees) ? req.body.employees : [];
+  const db = readDb();
+  db.employeeRules = db.employeeRules || {};
+  employees.forEach((e) => {
+    const name = String(e?.name || "").trim();
+    if (!name) return;
+    db.employeeRules[name] = {
+      id: String(e?.id || ""),
+      code: String(e?.code || ""),
+      active: e?.active !== false,
+      workStart: String(e?.workStart || "09:00"),
+      workEnd: String(e?.workEnd || "17:00"),
+    };
+  });
+  writeDb(db);
+  res.json({ ok: true, count: Object.keys(db.employeeRules).length });
 });
 
 app.post("/api/maps/resolve-latlng", async (req, res) => {
@@ -554,6 +588,22 @@ app.post("/api/shift/deliver-one", async (req, res) => {
   res.json({ ok: true, ...result });
 });
 
+app.post("/api/shift/deliver-range", async (req, res) => {
+  const targetStartDate = String(req.body?.targetStartDate || "").trim();
+  const targetEndDate = String(req.body?.targetEndDate || "").trim();
+  const employee = String(req.body?.employee || "").trim();
+  if (!targetStartDate || !targetEndDate) {
+    return res.status(400).json({ ok: false, error: "targetStartDate/targetEndDate are required" });
+  }
+  if (targetStartDate > targetEndDate) {
+    return res.status(400).json({ ok: false, error: "targetStartDate must be <= targetEndDate" });
+  }
+  const result = employee
+    ? await deliverShiftRangeToEmployee(targetStartDate, targetEndDate, employee)
+    : await deliverShiftRange(targetStartDate, targetEndDate, "manual");
+  res.json({ ok: true, ...result });
+});
+
 app.get("/api/shift/delivery-status", (_req, res) => {
   const db = readDb();
   res.json({
@@ -562,6 +612,50 @@ app.get("/api/shift/delivery-status", (_req, res) => {
     lastTargetDate: db.shiftDelivery?.lastTargetDate || null,
     lastMode: db.shiftDelivery?.lastMode || null,
     sentCount: Number(db.shiftDelivery?.lastSentCount || 0),
+  });
+});
+
+app.post("/api/timecards/overtime-review", (req, res) => {
+  const sourceKey = String(req.body?.sourceKey || "").trim();
+  const action = String(req.body?.action || "").trim();
+  if (!sourceKey || !["approve", "reject"].includes(action)) {
+    return res.status(400).json({ ok: false, error: "sourceKey and action(approve/reject) are required" });
+  }
+
+  const db = readDb();
+  const row = (db.timecards || []).find((r) => buildTimecardSourceKey(r) === sourceKey);
+  if (!row) return res.status(404).json({ ok: false, error: "timecard not found" });
+
+  if (action === "approve") {
+    row.overtimeApprovalStatus = "approved";
+    row.overtimeApprovedAt = new Date().toISOString();
+  } else {
+    const fallbackEnd = String(row.scheduledEnd || "17:00");
+    if (isValidHHMM(row.checkIn) && isValidHHMM(fallbackEnd)) {
+      const recalc = recalcAttendanceByRule(row.date, row.checkIn, fallbackEnd, Number(row.breakMin || 0), row.employee, db);
+      row.checkOut = fallbackEnd;
+      row.hours = recalc.hours;
+      row.overtime = recalc.overtime;
+      row.isLate = recalc.isLate;
+      row.payrollEligible = recalc.payrollEligible;
+      row.payrollRule = recalc.payrollEligible ? "normal_window" : "outside_window";
+      row.scheduledStart = recalc.scheduledStart;
+      row.scheduledEnd = recalc.scheduledEnd;
+      row.scheduledHours = recalc.scheduledHours;
+    }
+    row.overtimeApprovalStatus = "rejected";
+    row.overtimeRejectedAt = new Date().toISOString();
+  }
+
+  writeDb(db);
+  res.json({
+    ok: true,
+    snapshot: {
+      lineSync: db.lineSync,
+      logs: db.logs.slice(-200),
+      timecards: db.timecards.slice(-1000),
+      lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
+    },
   });
 });
 
@@ -972,38 +1066,59 @@ function processLineAction({ employee, site, action, source, lineUserId = "", gp
         );
       }
       const checkInAt = new Date(userCheckin.checkInISO);
-      const rawHours = (now.getTime() - checkInAt.getTime()) / 3600000;
-      const hours = Math.max(0.5, Number((rawHours - breakMin / 60).toFixed(1)));
-      const overtime = Math.max(0, Number((hours - 8).toFixed(1)));
-      const isLate = Number(userCheckin.checkInMinutes || 0) > 9 * 60;
-      const payrollEligible = isPayrollEligibleByWindow(Number(userCheckin.checkInMinutes || 0));
       const checkInJst = toJstParts(checkInAt);
+      const recalc = recalcAttendanceByRule(
+        date,
+        checkInJst.time,
+        time,
+        breakMin,
+        sessionEmployee,
+        db
+      );
 
-      db.timecards.push({
+      const row = {
         date,
         employee: sessionEmployee,
         site: userCheckin.site || site,
         lineUserId: lineUserId || userCheckin.lineUserId || null,
         checkIn: checkInJst.time,
         checkOut: time,
-        hours,
+        hours: recalc.hours,
         breakMin,
-        overtime,
-        isLate,
-        payrollEligible,
-        payrollRule: payrollEligible ? "normal_window" : "outside_window",
+        overtime: recalc.overtime,
+        isLate: recalc.isLate,
+        payrollEligible: recalc.payrollEligible,
+        payrollRule: recalc.payrollEligible ? "normal_window" : "outside_window",
+        scheduledStart: recalc.scheduledStart,
+        scheduledEnd: recalc.scheduledEnd,
+        scheduledHours: recalc.scheduledHours,
+        overtimeApprovalStatus: recalc.exceededScheduledEnd ? "pending" : "none",
+        overtimeRequestedAt: recalc.exceededScheduledEnd ? now.toISOString() : null,
         checkInGps: userCheckin.checkInGps || null,
         alcohol: userCheckin.alcohol || null,
+      };
+      row.sourceKey = buildTimecardSourceKey(row);
+      db.timecards.push(row);
+      db.logs.push({
+        date,
+        time,
+        employee: sessionEmployee,
+        site,
+        action: "退勤",
+        source,
+        hours: recalc.hours,
+        breakMin,
+        overtime: recalc.overtime,
+        lineUserId: lineUserId || null,
       });
-      db.logs.push({ date, time, employee: sessionEmployee, site, action: "退勤", source, hours, breakMin, overtime, lineUserId: lineUserId || null });
       db.lineSync = {
         employee: sessionEmployee,
         site: userCheckin.site || site,
         action: "退勤",
         time,
-        hours,
+        hours: recalc.hours,
         breakMin,
-        overtime,
+        overtime: recalc.overtime,
         dateISO: now.toISOString(),
         lineUserId: lineUserId || null,
       };
@@ -1193,6 +1308,21 @@ function buildShiftMessageForEmployee(db, targetDate, employeeName) {
   );
 }
 
+function buildShiftMessageForEmployeeRange(db, startDate, endDate, employeeName) {
+  const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
+  const userPlans = plans
+    .filter((p) => p.employee === employeeName && p.date >= startDate && p.date <= endDate)
+    .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
+
+  if (userPlans.length === 0) {
+    return `【Liive シフト連絡】\n対象期間: ${formatYmdJp(startDate)}〜${formatYmdJp(endDate)}\nシフトは未登録です。管理者に確認してください。`;
+  }
+  return (
+    `【Liive シフト連絡】\n対象期間: ${formatYmdJp(startDate)}〜${formatYmdJp(endDate)}\n` +
+    userPlans.map((p) => `${formatYmdJp(p.date)} ${p.start}-${p.end} / ${p.route}`).join("\n")
+  );
+}
+
 function getJstDateOffset(offsetDays = 0) {
   const now = new Date();
   const jstNow = new Date(now.toLocaleString("en-US", { timeZone: APP_TIMEZONE }));
@@ -1270,11 +1400,98 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
 async function deliverShiftToEmployee(targetDate, employeeName) {
   const db = readDb();
   const userMap = db.userMap || {};
-  const targetUserId = Object.keys(userMap).find((uid) => (userMap[uid]?.employeeName || userMap[uid]?.employee || "") === employeeName);
-  if (!targetUserId) return { targetDate, employee: employeeName, sentCount: 0, skippedCount: 1 };
+  const normalizeEmployeeKey = (v) => String(v || "").trim().replace(/\s+/g, "").toLowerCase();
+  const wanted = normalizeEmployeeKey(employeeName);
+  const targetUserId = Object.keys(userMap).find((uid) => {
+    const profile = userMap[uid] || {};
+    const byName = normalizeEmployeeKey(profile.employeeName || profile.employee || "") === wanted;
+    const byId = normalizeEmployeeKey(profile.employeeId || "") === wanted;
+    return byName || byId;
+  });
+  if (!targetUserId) {
+    return {
+      targetDate,
+      employee: employeeName,
+      sentCount: 0,
+      skippedCount: 1,
+      reason: "LINE紐付けが見つかりません（社員名または社員コードの一致なし）",
+    };
+  }
   const message = buildShiftMessageForEmployee(db, targetDate, employeeName);
   const ok = await sendLinePush(targetUserId, message);
-  return { targetDate, employee: employeeName, sentCount: ok ? 1 : 0, skippedCount: ok ? 0 : 1 };
+  return {
+    targetDate,
+    employee: employeeName,
+    sentCount: ok ? 1 : 0,
+    skippedCount: ok ? 0 : 1,
+    matchedUserId: targetUserId,
+    reason: ok ? "" : "LINE Push送信に失敗しました（チャネル設定またはトークンを確認）",
+  };
+}
+
+async function deliverShiftRange(targetStartDate, targetEndDate, mode = "manual") {
+  const db = readDb();
+  const userMap = db.userMap || {};
+  let sentCount = 0;
+  let skippedCount = 0;
+
+  for (const [userId, profile] of Object.entries(userMap)) {
+    const employeeName = profile?.employeeName || profile?.employee || "";
+    if (!employeeName) {
+      skippedCount += 1;
+      continue;
+    }
+    const message = buildShiftMessageForEmployeeRange(db, targetStartDate, targetEndDate, employeeName);
+    const ok = await sendLinePush(userId, message);
+    if (ok) sentCount += 1;
+    else skippedCount += 1;
+  }
+
+  db.shiftDelivery = {
+    lastSentAt: new Date().toISOString(),
+    lastSentDateJst: getJstDateOffset(0),
+    lastTargetDate: `${targetStartDate}..${targetEndDate}`,
+    lastMode: mode,
+    lastSentCount: sentCount,
+  };
+  writeDb(db);
+  return { targetStartDate, targetEndDate, sentCount, skippedCount };
+}
+
+async function deliverShiftRangeToEmployee(targetStartDate, targetEndDate, employeeName) {
+  const db = readDb();
+  const userMap = db.userMap || {};
+  const normalizeEmployeeKey = (v) => String(v || "").trim().replace(/\s+/g, "").toLowerCase();
+  const wanted = normalizeEmployeeKey(employeeName);
+  const targetUserId = Object.keys(userMap).find(
+    (uid) => {
+      const profile = userMap[uid] || {};
+      const byName = normalizeEmployeeKey(profile.employeeName || profile.employee || "") === wanted;
+      const byId = normalizeEmployeeKey(profile.employeeId || "") === wanted;
+      return byName || byId;
+    }
+  );
+  if (!targetUserId) {
+    return {
+      targetStartDate,
+      targetEndDate,
+      employee: employeeName,
+      sentCount: 0,
+      skippedCount: 1,
+      reason: "LINE紐付けが見つかりません（社員名または社員コードの一致なし）",
+    };
+  }
+  const message = buildShiftMessageForEmployeeRange(db, targetStartDate, targetEndDate, employeeName);
+  const ok = await sendLinePush(targetUserId, message);
+  return {
+    targetStartDate,
+    targetEndDate,
+    employee: employeeName,
+    sentCount: ok ? 1 : 0,
+    skippedCount: ok ? 0 : 1,
+    matchedUserId: targetUserId,
+    reason: ok ? "" : "LINE Push送信に失敗しました（チャネル設定またはトークンを確認）",
+  };
 }
 
 async function runShiftAutoDelivery() {
@@ -1330,6 +1547,11 @@ function readDb() {
       parsed.lastLocations = parsed.lastLocations || {};
       parsed.lineCorrectionRequests = Array.isArray(parsed.lineCorrectionRequests) ? parsed.lineCorrectionRequests : [];
       parsed.alcoholEvidence = Array.isArray(parsed.alcoholEvidence) ? parsed.alcoholEvidence : [];
+      parsed.employeeRules = parsed.employeeRules || {};
+      parsed.timecards = parsed.timecards.map((row) => ({
+        ...row,
+        sourceKey: row.sourceKey || buildTimecardSourceKey(row),
+      }));
       return parsed;
     }
   } catch (_e) {}
@@ -1347,6 +1569,7 @@ function readDb() {
     lastLocations: {},
     lineCorrectionRequests: [],
     alcoholEvidence: [],
+    employeeRules: {},
   };
 }
 
@@ -1360,6 +1583,79 @@ function safeJsonParse(text, fallback) {
   } catch (_e) {
     return fallback;
   }
+}
+
+function isValidHHMM(text) {
+  return /^\d{2}:\d{2}$/.test(String(text || ""));
+}
+
+function minutesFromHHMM(hhmm) {
+  if (!isValidHHMM(hhmm)) return null;
+  const [h, m] = String(hhmm).split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+}
+
+function getEmployeeRuleFromDb(db, employeeName) {
+  const rule = db?.employeeRules?.[employeeName] || {};
+  const workStart = isValidHHMM(rule.workStart) ? rule.workStart : "09:00";
+  const workEnd = isValidHHMM(rule.workEnd) ? rule.workEnd : "17:00";
+  return { workStart, workEnd };
+}
+
+function calcScheduledMinutes(workStart, workEnd) {
+  const s = minutesFromHHMM(workStart);
+  const e = minutesFromHHMM(workEnd);
+  if (s === null || e === null) return 8 * 60;
+  const diff = e >= s ? e - s : e + 24 * 60 - s;
+  return Math.max(60, diff);
+}
+
+function isPayrollEligibleByRule(checkInMinutes, workStartMinutes) {
+  const start = Number.isFinite(workStartMinutes) ? workStartMinutes : 9 * 60;
+  return checkInMinutes >= start - 10 && checkInMinutes <= start + 10;
+}
+
+function recalcAttendanceByRule(date, checkIn, checkOut, breakMin, employeeName, db) {
+  if (!isValidHHMM(checkIn) || !isValidHHMM(checkOut)) {
+    return {
+      hours: 0,
+      overtime: 0,
+      isLate: false,
+      payrollEligible: false,
+      scheduledStart: "09:00",
+      scheduledEnd: "17:00",
+      scheduledHours: 8,
+      exceededScheduledEnd: false,
+    };
+  }
+  const checkInAt = new Date(`${date}T${checkIn}:00`);
+  const checkOutAt = new Date(`${date}T${checkOut}:00`);
+  const rawHours = (checkOutAt.getTime() - checkInAt.getTime()) / 3600000;
+  const hours = Math.max(0.5, Number((rawHours - Number(breakMin || 0) / 60).toFixed(1)));
+
+  const rule = getEmployeeRuleFromDb(db, employeeName);
+  const startMin = minutesFromHHMM(checkIn);
+  const endMin = minutesFromHHMM(checkOut);
+  const scheduledStartMin = minutesFromHHMM(rule.workStart);
+  const scheduledEndMin = minutesFromHHMM(rule.workEnd);
+  const scheduledMinutes = calcScheduledMinutes(rule.workStart, rule.workEnd);
+  const scheduledHours = Number((scheduledMinutes / 60).toFixed(1));
+
+  return {
+    hours,
+    overtime: Number(Math.max(0, hours - scheduledHours).toFixed(1)),
+    isLate: startMin !== null && scheduledStartMin !== null ? startMin > scheduledStartMin : false,
+    payrollEligible: startMin !== null ? isPayrollEligibleByRule(startMin, scheduledStartMin) : false,
+    scheduledStart: rule.workStart,
+    scheduledEnd: rule.workEnd,
+    scheduledHours,
+    exceededScheduledEnd: endMin !== null && scheduledEndMin !== null ? endMin > scheduledEndMin : false,
+  };
+}
+
+function buildTimecardSourceKey(row) {
+  return `${row?.date || ""}|${row?.employee || ""}|${row?.site || ""}|${row?.checkIn || ""}|${row?.checkOut || ""}`;
 }
 
 function backfillPlaceholderEmployee(db, userId, employeeName) {

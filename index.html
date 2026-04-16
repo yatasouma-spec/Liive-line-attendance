@@ -349,6 +349,8 @@
               <form id="employeeForm" class="master-form">
                 <input id="employeeCode" type="text" placeholder="社員コード 例:E001" required />
                 <input id="employeeName" type="text" placeholder="社員名" required />
+                <input id="employeeWorkStart" type="time" value="09:00" required />
+                <input id="employeeWorkEnd" type="time" value="17:00" required />
                 <button type="submit" class="btn">社員を追加</button>
               </form>
               <div class="table-wrap">
@@ -357,6 +359,7 @@
                     <tr>
                       <th>コード</th>
                       <th>社員名</th>
+                      <th>標準勤務</th>
                       <th>状態</th>
                       <th>操作</th>
                     </tr>
@@ -405,9 +408,16 @@
             <div class="filters">
               <button type="button" class="btn btn-ghost" id="sendShiftNowBtn">明日分シフトをLINE配信</button>
               <button type="button" class="btn btn-ghost" id="sendShiftOneBtn">選択社員へ個別配信</button>
-              <label class="toolbar-field search">CSV取込<input id="shiftCsvInput" type="file" accept=".csv" /></label>
+              <button type="button" class="btn btn-ghost" id="sendShiftRangeBtn">期間シフトを一斉配信</button>
+              <button type="button" class="btn btn-ghost" id="sendShiftRangeOneBtn">選択社員へ期間配信</button>
+              <label class="toolbar-field search">CSV取込<input id="shiftCsvInput" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" /></label>
               <p id="shiftDeliveryStatus" class="section-lead">まだ配信実行していません</p>
             </div>
+            <form id="shiftRangeForm" class="shift-form">
+              <input id="shiftRangeStartDate" type="date" required />
+              <input id="shiftRangeEndDate" type="date" required />
+              <small class="section-lead">1週間〜1か月をLINEでまとめて配信できます</small>
+            </form>
             <form id="shiftPlanForm" class="shift-form">
               <input id="shiftDate" type="date" required />
               <select id="shiftEmployee" required></select>
@@ -540,6 +550,7 @@
         </section>
       </main>
     </div>
+    <script src="/node_modules/xlsx/dist/xlsx.full.min.js"></script>
     <script src="./app.v3.js"></script>
   </body>
 </html>
