@@ -231,7 +231,7 @@
           <section class="panel">
             <div class="panel-head">
               <h2>月次勤怠集計（タイムカード置換）</h2>
-              <div class="filters filter-toolbar">
+              <div class="filters filter-toolbar summary-toolbar">
                 <label class="toolbar-field template">CSV形式<select id="csvTemplate">
                     <option value="standard_monthly">標準（社員月次）</option>
                     <option value="freee_daily">freee連携向け（日次明細）</option>
@@ -242,34 +242,22 @@
                   </select></label>
                 <div class="toolbar-actions">
                   <button type="button" class="btn" id="applySummaryFilterBtn">表示</button>
-                  <button type="button" class="btn btn-ghost" id="generateAutoFillBtn">打刻漏れの修正候補を作成</button>
-                  <button type="button" class="btn" id="toggleMonthLockBtn">この月をロック</button>
-                  <button type="button" class="btn btn-ghost" id="requestMonthUnlockBtn">この月のロック解除申請</button>
+                  <button type="button" class="btn btn-ghost" id="generateAutoFillBtn">不足打刻の下書きを作成</button>
                   <button type="button" class="btn btn-ghost" id="downloadAuditPackageBtn">監査提出データを一括出力</button>
                 </div>
               </div>
             </div>
-            <p class="section-lead" id="monthLockStatus">未ロック</p>
-            <div class="closing-box">
-              <h3>締め処理チェック</h3>
-              <ul id="closingChecklist" class="log-list"></ul>
-            </div>
-            <div class="closing-box">
-              <h3>ロック解除申請（承認制）</h3>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>対象月</th>
-                      <th>申請理由</th>
-                      <th>申請日時</th>
-                      <th>状態</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody id="monthUnlockRequestBody"></tbody>
-                </table>
+            <p class="section-lead summary-helper">「不足打刻の下書きを作成」は、シフト予定があるのに打刻実績がない日を修正依頼の下書きとして作成します。</p>
+            <div class="closing-box summary-checklist">
+              <div class="panel-head">
+                <h3>月次チェック（要対応一覧）</h3>
+                <div class="summary-action-grid">
+                  <span class="summary-chip danger">要対応 <strong id="monthBlockCount">0</strong></span>
+                  <span class="summary-chip warn">確認 <strong id="monthWarnCount">0</strong></span>
+                  <span class="summary-chip">申請中 <strong id="pendingCorrectionCount">0</strong></span>
+                </div>
               </div>
+              <ul id="closingChecklist" class="log-list"></ul>
             </div>
             <section class="grid-2 summary-visuals">
               <article class="panel chart-panel compact-panel">

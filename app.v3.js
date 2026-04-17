@@ -516,7 +516,7 @@ function timeLabel() {
 }
 
 function isMonthLocked(month) {
-  return Boolean(state.monthLocks[month]);
+  return false;
 }
 
 async function apiRequest(path, options = {}) {
@@ -629,12 +629,7 @@ function buildClosingChecklist(month) {
     issues.push({ level: "warn", text: `45h超過見込みの社員が ${over45.length} 名います` });
   }
 
-  const unlockPending = state.monthUnlockRequests.filter((r) => r.month === month && r.status === "申請中");
-  if (unlockPending.length) {
-    issues.push({ level: "warn", text: `ロック解除申請が ${unlockPending.length} 件あります` });
-  }
-
-  if (!issues.length) issues.push({ level: "ok", text: "締め処理の阻害要因はありません" });
+  if (!issues.length) issues.push({ level: "ok", text: "今月の勤怠データに重大な問題はありません" });
   return issues;
 }
 
@@ -668,7 +663,7 @@ function generateAutoFillCandidates() {
       newCheckOut: plan.end,
       newBreakMin: 60,
       fixStatus: "normal",
-      reason: "打刻漏れ自動補正（シフト予定ベース）",
+      reason: "不足打刻の下書き作成（シフト予定ベース）",
       requestType: "auto_fill",
     });
     created += 1;
@@ -1131,7 +1126,6 @@ function renderTimecards() {
   const body = document.getElementById("timecardTableBody");
   if (!body) return;
   const rows = filteredTimecards().sort((a, b) => `${b.date}${b.checkOut || ""}`.localeCompare(`${a.date}${a.checkOut || ""}`));
-  const locked = isMonthLocked(selectedMonth());
 
   body.innerHTML = rows.length
     ? rows
@@ -1145,7 +1139,7 @@ function renderTimecards() {
       <td>${(Number(r.breakMin || 0) / 60).toFixed(1)}h</td>
       <td>${Number(r.overtime || 0).toFixed(1)}h</td>
       <td>${r.isLate ? "あり" : "なし"}</td>
-      <td><button class="btn btn-ghost" data-request-correction="${r.sourceKey || sourceKey(r)}" ${locked ? "disabled" : ""}>修正申請</button></td>
+      <td><button class="btn btn-ghost" data-request-correction="${r.sourceKey || sourceKey(r)}">修正申請</button></td>
     </tr>`)
         .join("")
     : '<tr><td class="empty" colspan="10">対象データがありません</td></tr>';
@@ -1213,17 +1207,6 @@ function renderSummary() {
   document.getElementById("summaryBreak").textContent = `${summary.reduce((s, r) => s + r.breakHours, 0).toFixed(1)}h`;
   document.getElementById("summaryOvertime").textContent = `${summary.reduce((s, r) => s + r.overtime, 0).toFixed(1)}h`;
 
-  document.getElementById("monthLockStatus").textContent = isMonthLocked(month)
-    ? `${month} はロック中（修正不可）`
-    : `${month} は未ロック（修正可能）`;
-  const lockBtn = document.getElementById("toggleMonthLockBtn");
-  if (lockBtn) lockBtn.textContent = isMonthLocked(month) ? "ロック中（解除は申請）" : "この月をロック";
-  const unlockReqBtn = document.getElementById("requestMonthUnlockBtn");
-  if (unlockReqBtn) {
-    unlockReqBtn.disabled = !isMonthLocked(month);
-    unlockReqBtn.textContent = isMonthLocked(month) ? "この月のロック解除申請" : "この月はロックされていません";
-  }
-
   body.innerHTML = summary.length
     ? summary
         .map((r) => {
@@ -1249,6 +1232,16 @@ function renderSummary() {
   const checklist = document.getElementById("closingChecklist");
   if (checklist) {
     const items = buildClosingChecklist(month);
+    const blockCount = items.filter((item) => item.level === "block").length;
+    const warnCount = items.filter((item) => item.level === "warn").length;
+    const pendingCount = state.pendingCorrections.filter((p) => (p.date || "").startsWith(month)).length;
+    const blockEl = document.getElementById("monthBlockCount");
+    const warnEl = document.getElementById("monthWarnCount");
+    const pendingEl = document.getElementById("pendingCorrectionCount");
+    if (blockEl) blockEl.textContent = String(blockCount);
+    if (warnEl) warnEl.textContent = String(warnCount);
+    if (pendingEl) pendingEl.textContent = String(pendingCount);
+
     checklist.innerHTML = items
       .map((item) => {
         const cls = item.level === "block" ? "danger" : item.level === "warn" ? "warn" : "ok";
@@ -1352,7 +1345,6 @@ function renderAll() {
   renderSummary();
   renderCorrectionDesk();
   renderMasters();
-  renderMonthUnlockRequests();
   renderLeaveRequests();
   applyEndLocationMode();
   syncLineMapPlacePreview("route");
@@ -1547,11 +1539,6 @@ function buildCorrectionDiffText(beforeIn, beforeOut, afterIn, afterOut, status)
 function requestCorrection(source) {
   const row = state.timecards.find((r) => (r.sourceKey || sourceKey(r)) === source);
   if (!row) return;
-  const month = (row.date || "").slice(0, 7);
-  if (isMonthLocked(month)) {
-    alert("この月はロック中です。ロック解除してから修正してください。");
-    return;
-  }
 
   const newIn = window.prompt("修正後の出勤時刻(HH:MM)", row.checkIn || "09:00");
   if (!newIn) return;
@@ -1699,11 +1686,6 @@ function parseShiftXlsxRows(rows2d) {
 function approveCorrection(id, override = null) {
   const req = state.pendingCorrections.find((p) => p.id === id);
   if (!req) return;
-  const month = (req.date || "").slice(0, 7);
-  if (isMonthLocked(month)) {
-    alert("この月はロック中です。");
-    return;
-  }
 
   const payload = {
     fixStatus: normalizeText(override?.fixStatus || req.fixStatus || "normal"),
@@ -2923,34 +2905,10 @@ function bindEvents() {
     renderSummary();
   });
 
-  document.getElementById("toggleMonthLockBtn")?.addEventListener("click", () => {
-    const month = selectedMonth();
-    if (!isMonthLocked(month)) {
-      const blockers = buildClosingChecklist(month).filter((x) => x.level === "block");
-      if (blockers.length) {
-        alert(`この月はまだロックできません。\n- ${blockers.map((b) => b.text).join("\n- ")}`);
-        return;
-      }
-      if (!window.confirm(`${month} を締めロックしますか？（修正申請不可）`)) return;
-      state.monthLocks[month] = true;
-    } else {
-      alert("ロック解除は「この月のロック解除申請」から申請し、承認してください。");
-      return;
-    }
-    renderAll();
-  });
-
-  document.getElementById("requestMonthUnlockBtn")?.addEventListener("click", () => {
-    const month = selectedMonth();
-    const ok = requestMonthUnlock(month);
-    if (!ok) return;
-    renderAll();
-  });
-
   document.getElementById("generateAutoFillBtn")?.addEventListener("click", () => {
     const created = generateAutoFillCandidates();
     renderAll();
-    alert(created > 0 ? `打刻漏れの修正候補を ${created} 件作成しました。` : "追加できる修正候補はありませんでした。");
+    alert(created > 0 ? `不足打刻の下書きを ${created} 件作成しました。` : "追加できる不足打刻の下書きはありませんでした。");
   });
 
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);

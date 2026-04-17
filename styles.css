@@ -453,6 +453,23 @@ button {
   justify-content: flex-end;
 }
 
+.summary-toolbar .toolbar-field.template {
+  grid-column: span 5;
+}
+
+.summary-toolbar .toolbar-actions {
+  grid-column: span 7;
+}
+
+.summary-helper {
+  margin: 8px 2px 0;
+  font-size: 0.88rem;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 55%, #fff 45%);
+  border: 1px dashed color-mix(in srgb, var(--primary-3) 40%, #d4d8e6 60%);
+}
+
 .master-form,
 .shift-form,
 .punch-form {
@@ -691,6 +708,44 @@ textarea:focus {
   font-size: 1rem;
 }
 
+.summary-checklist .panel-head {
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.summary-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--sub);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.summary-chip strong {
+  color: var(--text);
+}
+
+.summary-chip.warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, #d8d8d8 65%);
+  background: color-mix(in srgb, var(--warn) 10%, #fff 90%);
+}
+
+.summary-chip.danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, #d8d8d8 65%);
+  background: color-mix(in srgb, var(--danger) 10%, #fff 90%);
+}
+
 .sync-status {
   margin: 0 0 6px;
   font-size: 1.03rem;
@@ -853,6 +908,11 @@ tbody tr:hover td {
   .toolbar-field.search,
   .toolbar-field.template,
   .toolbar-actions {
+    grid-column: span 1;
+  }
+
+  .summary-toolbar .toolbar-field.template,
+  .summary-toolbar .toolbar-actions {
     grid-column: span 1;
   }
 
