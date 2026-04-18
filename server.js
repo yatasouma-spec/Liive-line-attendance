@@ -16,7 +16,7 @@ const APP_TIMEZONE = "Asia/Tokyo";
 const SHIFT_AUTO_SEND_HOUR = Number(process.env.SHIFT_AUTO_SEND_HOUR || 18);
 const SHIFT_AUTO_SEND_MINUTE = Number(process.env.SHIFT_AUTO_SEND_MINUTE || 0);
 const ATTENDANCE_CONFIRM_WINDOW_MIN = Number(process.env.ATTENDANCE_CONFIRM_WINDOW_MIN || 2);
-const ALCOHOL_LIMIT = Number(process.env.ALCOHOL_LIMIT || 0);
+const DEFAULT_ALCOHOL_LIMIT = Number(process.env.ALCOHOL_LIMIT || 0);
 const EVIDENCE_RETENTION_DAYS = Number(process.env.EVIDENCE_RETENTION_DAYS || 730);
 const DEFAULT_ATTENDANCE_POLICY = {
   mode: "payroll_exclude",
@@ -345,7 +345,15 @@ app.get("/api/bootstrap", (_req, res) => {
     timecards: db.timecards.slice(-1000),
     lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
     attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
+    alcoholLimit: normalizeAlcoholLimit(db.alcoholLimit),
   });
+});
+
+app.post("/api/settings/alcohol-limit", (req, res) => {
+  const db = readDb();
+  db.alcoholLimit = normalizeAlcoholLimit(req.body?.alcoholLimit);
+  writeDb(db);
+  res.json({ ok: true, alcoholLimit: db.alcoholLimit });
 });
 
 app.post("/api/employees/sync", (req, res) => {
@@ -986,7 +994,8 @@ function advanceCheckinFlow(db, userId, text, profile) {
         finalize: false,
       };
     }
-    if (alcoholValue > ALCOHOL_LIMIT) {
+    const alcoholLimit = normalizeAlcoholLimit(db?.alcoholLimit);
+    if (alcoholValue > alcoholLimit) {
       delete db.lineWorkflows[userId];
       db.logs.push({
         date: toJstParts(new Date()).date,
@@ -999,7 +1008,7 @@ function advanceCheckinFlow(db, userId, text, profile) {
       });
       db.logs = db.logs.slice(-2000);
       return {
-        message: `飲酒値 ${alcoholValue.toFixed(2)} は規定値を超えています。出勤は反映されません。`,
+        message: `飲酒値 ${alcoholValue.toFixed(2)} は規定値 ${alcoholLimit.toFixed(2)} を超えています。出勤は反映されません。`,
         withQuickReply: true,
         finalize: false,
       };
@@ -1440,6 +1449,11 @@ function getJstDateOffset(offsetDays = 0) {
   return `${y}-${m}-${d}`;
 }
 
+function normalizeYmd(value) {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+}
+
 function getJstNowParts() {
   const now = new Date();
   const parts = toJstParts(now);
@@ -1466,12 +1480,21 @@ function formatYmdWithWeekdayJp(ymd) {
 }
 
 async function deliverShiftByDate(targetDate, mode = "manual") {
+  const date = normalizeYmd(targetDate);
+  if (!date) {
+    return { targetDate, sentCount: 0, skippedCount: 0, reason: "日付形式が不正です（YYYY-MM-DD）" };
+  }
+  const todayJst = getJstDateOffset(0);
+  if (date < todayJst) {
+    return { targetDate: date, sentCount: 0, skippedCount: 0, reason: "過去日のシフトは配信対象外です" };
+  }
+
   const db = readDb();
   const userMap = db.userMap || {};
   const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
   const byEmployee = new Map();
   plans
-    .filter((p) => p.date === targetDate)
+    .filter((p) => p.date === date)
     .forEach((p) => {
       const key = p.employee;
       const arr = byEmployee.get(key) || [];
@@ -1488,7 +1511,7 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
       skippedCount += 1;
       continue;
     }
-    const message = buildShiftMessageForEmployee(db, targetDate, employeeName);
+    const message = buildShiftMessageForEmployee(db, date, employeeName);
 
     const ok = await sendLinePush(userId, message);
     if (ok) sentCount += 1;
@@ -1498,22 +1521,43 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
   db.shiftDelivery = {
     lastSentAt: new Date().toISOString(),
     lastSentDateJst: getJstDateOffset(0),
-    lastTargetDate: targetDate,
+    lastTargetDate: date,
     lastMode: mode,
     lastSentCount: sentCount,
   };
   appendShiftDeliveryHistory(db, {
     mode: mode === "auto" ? "auto_daily" : "manual_daily_all",
-    targetLabel: formatYmdWithWeekdayJp(targetDate),
+    targetLabel: formatYmdWithWeekdayJp(date),
     sentCount,
     skippedCount,
     employee: "",
   });
   writeDb(db);
-  return { targetDate, sentCount, skippedCount };
+  return { targetDate: date, sentCount, skippedCount };
 }
 
 async function deliverShiftToEmployee(targetDate, employeeName) {
+  const date = normalizeYmd(targetDate);
+  if (!date) {
+    return {
+      targetDate,
+      employee: employeeName,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "日付形式が不正です（YYYY-MM-DD）",
+    };
+  }
+  const todayJst = getJstDateOffset(0);
+  if (date < todayJst) {
+    return {
+      targetDate: date,
+      employee: employeeName,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "過去日のシフトは配信対象外です",
+    };
+  }
+
   const db = readDb();
   const userMap = db.userMap || {};
   const normalizeEmployeeKey = (v) => String(v || "").trim().replace(/\s+/g, "").toLowerCase();
@@ -1533,25 +1577,25 @@ async function deliverShiftToEmployee(targetDate, employeeName) {
       reason: "LINE紐付けが見つかりません（社員名または社員コードの一致なし）",
     };
   }
-  const message = buildShiftMessageForEmployee(db, targetDate, employeeName);
+  const message = buildShiftMessageForEmployee(db, date, employeeName);
   const ok = await sendLinePush(targetUserId, message);
   db.shiftDelivery = {
     lastSentAt: new Date().toISOString(),
     lastSentDateJst: getJstDateOffset(0),
-    lastTargetDate: `${targetDate} / ${employeeName}`,
+    lastTargetDate: `${date} / ${employeeName}`,
     lastMode: "manual_daily_one",
     lastSentCount: ok ? 1 : 0,
   };
   appendShiftDeliveryHistory(db, {
     mode: "manual_daily_one",
-    targetLabel: `${formatYmdWithWeekdayJp(targetDate)} / ${employeeName}`,
+    targetLabel: `${formatYmdWithWeekdayJp(date)} / ${employeeName}`,
     sentCount: ok ? 1 : 0,
     skippedCount: ok ? 0 : 1,
     employee: employeeName,
   });
   writeDb(db);
   return {
-    targetDate,
+    targetDate: date,
     employee: employeeName,
     sentCount: ok ? 1 : 0,
     skippedCount: ok ? 0 : 1,
@@ -1561,6 +1605,41 @@ async function deliverShiftToEmployee(targetDate, employeeName) {
 }
 
 async function deliverShiftRange(targetStartDate, targetEndDate, mode = "manual") {
+  const requestedStartDate = normalizeYmd(targetStartDate);
+  const requestedEndDate = normalizeYmd(targetEndDate);
+  if (!requestedStartDate || !requestedEndDate) {
+    return {
+      targetStartDate,
+      targetEndDate,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "日付形式が不正です（YYYY-MM-DD）",
+    };
+  }
+  if (requestedStartDate > requestedEndDate) {
+    return {
+      targetStartDate: requestedStartDate,
+      targetEndDate: requestedEndDate,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "開始日が終了日より後です",
+    };
+  }
+  const todayJst = getJstDateOffset(0);
+  const effectiveStartDate = requestedStartDate < todayJst ? todayJst : requestedStartDate;
+  const effectiveEndDate = requestedEndDate;
+  if (effectiveStartDate > effectiveEndDate) {
+    return {
+      targetStartDate: effectiveStartDate,
+      targetEndDate: effectiveEndDate,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "指定期間がすべて過去日です（本日以降のシフトのみ配信できます）",
+      requestedStartDate,
+      requestedEndDate,
+    };
+  }
+
   const db = readDb();
   const userMap = db.userMap || {};
   let sentCount = 0;
@@ -1572,7 +1651,7 @@ async function deliverShiftRange(targetStartDate, targetEndDate, mode = "manual"
       skippedCount += 1;
       continue;
     }
-    const message = buildShiftMessageForEmployeeRange(db, targetStartDate, targetEndDate, employeeName);
+    const message = buildShiftMessageForEmployeeRange(db, effectiveStartDate, effectiveEndDate, employeeName);
     const ok = await sendLinePush(userId, message);
     if (ok) sentCount += 1;
     else skippedCount += 1;
@@ -1581,22 +1660,67 @@ async function deliverShiftRange(targetStartDate, targetEndDate, mode = "manual"
   db.shiftDelivery = {
     lastSentAt: new Date().toISOString(),
     lastSentDateJst: getJstDateOffset(0),
-    lastTargetDate: `${targetStartDate}..${targetEndDate}`,
+    lastTargetDate: `${effectiveStartDate}..${effectiveEndDate}`,
     lastMode: mode,
     lastSentCount: sentCount,
   };
   appendShiftDeliveryHistory(db, {
     mode: "manual_range_all",
-    targetLabel: `${formatYmdWithWeekdayJp(targetStartDate)}〜${formatYmdWithWeekdayJp(targetEndDate)}`,
+    targetLabel: `${formatYmdWithWeekdayJp(effectiveStartDate)}〜${formatYmdWithWeekdayJp(effectiveEndDate)}`,
     sentCount,
     skippedCount,
     employee: "",
   });
   writeDb(db);
-  return { targetStartDate, targetEndDate, sentCount, skippedCount };
+  return {
+    targetStartDate: effectiveStartDate,
+    targetEndDate: effectiveEndDate,
+    sentCount,
+    skippedCount,
+    requestedStartDate,
+    requestedEndDate,
+  };
 }
 
 async function deliverShiftRangeToEmployee(targetStartDate, targetEndDate, employeeName) {
+  const requestedStartDate = normalizeYmd(targetStartDate);
+  const requestedEndDate = normalizeYmd(targetEndDate);
+  if (!requestedStartDate || !requestedEndDate) {
+    return {
+      targetStartDate,
+      targetEndDate,
+      employee: employeeName,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "日付形式が不正です（YYYY-MM-DD）",
+    };
+  }
+  if (requestedStartDate > requestedEndDate) {
+    return {
+      targetStartDate: requestedStartDate,
+      targetEndDate: requestedEndDate,
+      employee: employeeName,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "開始日が終了日より後です",
+    };
+  }
+  const todayJst = getJstDateOffset(0);
+  const effectiveStartDate = requestedStartDate < todayJst ? todayJst : requestedStartDate;
+  const effectiveEndDate = requestedEndDate;
+  if (effectiveStartDate > effectiveEndDate) {
+    return {
+      targetStartDate: effectiveStartDate,
+      targetEndDate: effectiveEndDate,
+      employee: employeeName,
+      sentCount: 0,
+      skippedCount: 0,
+      reason: "指定期間がすべて過去日です（本日以降のシフトのみ配信できます）",
+      requestedStartDate,
+      requestedEndDate,
+    };
+  }
+
   const db = readDb();
   const userMap = db.userMap || {};
   const normalizeEmployeeKey = (v) => String(v || "").trim().replace(/\s+/g, "").toLowerCase();
@@ -1619,30 +1743,32 @@ async function deliverShiftRangeToEmployee(targetStartDate, targetEndDate, emplo
       reason: "LINE紐付けが見つかりません（社員名または社員コードの一致なし）",
     };
   }
-  const message = buildShiftMessageForEmployeeRange(db, targetStartDate, targetEndDate, employeeName);
+  const message = buildShiftMessageForEmployeeRange(db, effectiveStartDate, effectiveEndDate, employeeName);
   const ok = await sendLinePush(targetUserId, message);
   db.shiftDelivery = {
     lastSentAt: new Date().toISOString(),
     lastSentDateJst: getJstDateOffset(0),
-    lastTargetDate: `${targetStartDate}..${targetEndDate} / ${employeeName}`,
+    lastTargetDate: `${effectiveStartDate}..${effectiveEndDate} / ${employeeName}`,
     lastMode: "manual_range_one",
     lastSentCount: ok ? 1 : 0,
   };
   appendShiftDeliveryHistory(db, {
     mode: "manual_range_one",
-    targetLabel: `${formatYmdWithWeekdayJp(targetStartDate)}〜${formatYmdWithWeekdayJp(targetEndDate)} / ${employeeName}`,
+    targetLabel: `${formatYmdWithWeekdayJp(effectiveStartDate)}〜${formatYmdWithWeekdayJp(effectiveEndDate)} / ${employeeName}`,
     sentCount: ok ? 1 : 0,
     skippedCount: ok ? 0 : 1,
     employee: employeeName,
   });
   writeDb(db);
   return {
-    targetStartDate,
-    targetEndDate,
+    targetStartDate: effectiveStartDate,
+    targetEndDate: effectiveEndDate,
     employee: employeeName,
     sentCount: ok ? 1 : 0,
     skippedCount: ok ? 0 : 1,
     matchedUserId: targetUserId,
+    requestedStartDate,
+    requestedEndDate,
     reason: ok ? "" : "LINE Push送信に失敗しました（チャネル設定またはトークンを確認）",
   };
 }
@@ -1697,6 +1823,7 @@ function ensureDataFile() {
       alcoholEvidence: [],
       employeeRules: {},
       attendancePolicy: { ...DEFAULT_ATTENDANCE_POLICY },
+      alcoholLimit: normalizeAlcoholLimit(DEFAULT_ALCOHOL_LIMIT),
     });
   }
 }
@@ -1721,6 +1848,7 @@ function readDb() {
       parsed.alcoholEvidence = Array.isArray(parsed.alcoholEvidence) ? parsed.alcoholEvidence : [];
       parsed.employeeRules = parsed.employeeRules || {};
       parsed.attendancePolicy = normalizeAttendancePolicy(parsed.attendancePolicy);
+      parsed.alcoholLimit = normalizeAlcoholLimit(parsed.alcoholLimit);
       parsed.timecards = parsed.timecards.map((row) => ({
         ...row,
         sourceKey: row.sourceKey || buildTimecardSourceKey(row),
@@ -1745,6 +1873,7 @@ function readDb() {
     alcoholEvidence: [],
     employeeRules: {},
     attendancePolicy: { ...DEFAULT_ATTENDANCE_POLICY },
+    alcoholLimit: normalizeAlcoholLimit(DEFAULT_ALCOHOL_LIMIT),
   };
 }
 
@@ -1789,6 +1918,12 @@ function normalizeAttendancePolicy(raw) {
     globalBeforeMin: clampMinute(raw?.globalBeforeMin, DEFAULT_ATTENDANCE_POLICY.globalBeforeMin),
     globalAfterMin: clampMinute(raw?.globalAfterMin, DEFAULT_ATTENDANCE_POLICY.globalAfterMin),
   };
+}
+
+function normalizeAlcoholLimit(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return Number(DEFAULT_ALCOHOL_LIMIT || 0);
+  return Math.min(1, Math.max(0, Number(num.toFixed(2))));
 }
 
 function minutesFromHHMM(hhmm) {

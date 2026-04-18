@@ -3,19 +3,16 @@ const TIMECARD_KEY = "liiveAttendanceTimecardsV3";
 const EMPLOYEES_KEY = "liiveAttendanceEmployeesV2";
 const ROUTES_KEY = "liiveAttendanceRoutesV2";
 const PENDING_KEY = "liiveAttendancePendingCorrectionsV2";
-const MONTH_LOCK_KEY = "liiveAttendanceMonthLocksV2";
 const CORRECTION_MAP_KEY = "liiveAttendanceApprovedMapV2";
 const CSV_TEMPLATE_KEY = "liiveAttendanceCsvTemplateV2";
 const AUDIT_KEY = "liiveAttendanceAuditTrailV2";
 const LEAVE_REQUEST_KEY = "liiveAttendanceLeaveRequestsV1";
-const MONTH_UNLOCK_REQ_KEY = "liiveAttendanceMonthUnlockRequestsV1";
-const VEHICLES_KEY = "liiveAttendanceVehiclesV1";
-const DRIVER_ASSIGN_KEY = "liiveAttendanceDriverVehicleV1";
 const SHIFT_PLAN_KEY = "liiveAttendanceShiftPlansV1";
 const GPS_EVENT_KEY = "liiveAttendanceGpsByEventV1";
 const OPEN_SESSION_KEY = "liiveAttendanceOpenSessionsV1";
 const THEME_KEY = "liiveAttendanceThemeV1";
 const ATTENDANCE_POLICY_KEY = "liiveAttendancePolicyV1";
+const ALCOHOL_LIMIT_KEY = "liiveAttendanceAlcoholLimitV1";
 
 const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
@@ -35,16 +32,13 @@ const defaultRoutes = [
   { id: "r4", name: "東エリア巡回", active: true },
 ];
 
-const defaultVehicles = [
-  { id: "v1", plate: "品川500 あ 12-34", name: "2tパッカーA", active: true },
-  { id: "v2", plate: "品川500 い 56-78", name: "4tパッカーB", active: true },
-];
-
 const defaultAttendancePolicy = {
   mode: "payroll_exclude",
   globalBeforeMin: 10,
   globalAfterMin: 10,
 };
+
+const defaultAlcoholLimit = 0;
 
 function loadJson(key, fallback) {
   try {
@@ -60,28 +54,25 @@ const state = {
   timecards: loadJson(TIMECARD_KEY, []),
   employees: loadJson(EMPLOYEES_KEY, defaultEmployees),
   routes: loadJson(ROUTES_KEY, defaultRoutes),
-  vehicles: loadJson(VEHICLES_KEY, defaultVehicles),
-  driverAssignments: loadJson(DRIVER_ASSIGN_KEY, {}),
   shiftPlans: loadJson(SHIFT_PLAN_KEY, []),
   gpsByEvent: loadJson(GPS_EVENT_KEY, {}),
   openSessions: loadJson(OPEN_SESSION_KEY, {}),
   pendingCorrections: loadJson(PENDING_KEY, []),
-  monthLocks: loadJson(MONTH_LOCK_KEY, {}),
   approvedCorrectionMap: loadJson(CORRECTION_MAP_KEY, {}),
   csvTemplate: loadJson(CSV_TEMPLATE_KEY, "standard_monthly"),
   auditTrail: loadJson(AUDIT_KEY, []),
   leaveRequests: loadJson(LEAVE_REQUEST_KEY, []),
-  monthUnlockRequests: loadJson(MONTH_UNLOCK_REQ_KEY, []),
   employeeSearch: "",
   currentGps: null,
   lineUsers: [],
   editingShiftId: "",
   theme: loadJson(THEME_KEY, "blue"),
   attendancePolicy: loadJson(ATTENDANCE_POLICY_KEY, defaultAttendancePolicy),
+  alcoholLimit: loadJson(ALCOHOL_LIMIT_KEY, defaultAlcoholLimit),
 };
 
 const viewTitle = {
-  dashboard: "社長ダッシュボード",
+  dashboard: "ダッシュボード",
   punch: "打刻（LINE）",
   records: "勤怠履歴",
   summary: "月次集計",
@@ -111,20 +102,17 @@ function persist() {
   localStorage.setItem(TIMECARD_KEY, JSON.stringify(state.timecards));
   localStorage.setItem(EMPLOYEES_KEY, JSON.stringify(state.employees));
   localStorage.setItem(ROUTES_KEY, JSON.stringify(state.routes));
-  localStorage.setItem(VEHICLES_KEY, JSON.stringify(state.vehicles));
-  localStorage.setItem(DRIVER_ASSIGN_KEY, JSON.stringify(state.driverAssignments));
   localStorage.setItem(SHIFT_PLAN_KEY, JSON.stringify(state.shiftPlans));
   localStorage.setItem(GPS_EVENT_KEY, JSON.stringify(state.gpsByEvent));
   localStorage.setItem(OPEN_SESSION_KEY, JSON.stringify(state.openSessions));
   localStorage.setItem(PENDING_KEY, JSON.stringify(state.pendingCorrections));
-  localStorage.setItem(MONTH_LOCK_KEY, JSON.stringify(state.monthLocks));
   localStorage.setItem(CORRECTION_MAP_KEY, JSON.stringify(state.approvedCorrectionMap));
   localStorage.setItem(CSV_TEMPLATE_KEY, JSON.stringify(state.csvTemplate));
   localStorage.setItem(AUDIT_KEY, JSON.stringify(state.auditTrail));
   localStorage.setItem(LEAVE_REQUEST_KEY, JSON.stringify(state.leaveRequests));
-  localStorage.setItem(MONTH_UNLOCK_REQ_KEY, JSON.stringify(state.monthUnlockRequests));
   localStorage.setItem(THEME_KEY, JSON.stringify(state.theme));
   localStorage.setItem(ATTENDANCE_POLICY_KEY, JSON.stringify(normalizeAttendancePolicy(state.attendancePolicy)));
+  localStorage.setItem(ALCOHOL_LIMIT_KEY, JSON.stringify(normalizeAlcoholLimit(state.alcoholLimit)));
 }
 
 function normalizePolicyMode(value) {
@@ -152,6 +140,12 @@ function normalizeAttendancePolicy(raw) {
     globalBeforeMin: clampMinute(raw?.globalBeforeMin, 10),
     globalAfterMin: clampMinute(raw?.globalAfterMin, 10),
   };
+}
+
+function normalizeAlcoholLimit(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.min(1, Math.max(0, Number(num.toFixed(2))));
 }
 
 function uid(prefix) {
@@ -190,10 +184,6 @@ function activeEmployees() {
 
 function activeRoutes() {
   return state.routes.filter((r) => r.active);
-}
-
-function activeVehicles() {
-  return state.vehicles.filter((v) => v.active);
 }
 
 function getEmployeeCode(name) {
@@ -251,14 +241,6 @@ function evaluateCheckInWindow(checkInMin, rule) {
     return { within: false, reason: "late_outside", startMin, beforeMin, afterMin };
   }
   return { within: true, reason: "within_window", startMin, beforeMin, afterMin };
-}
-
-function getVehicleById(id) {
-  return state.vehicles.find((v) => v.id === id);
-}
-
-function getVehicleNameByEmployee(employeeName) {
-  return "-";
 }
 
 function normalizeText(value) {
@@ -453,6 +435,40 @@ function syncLineMapPlacePreview(prefix) {
   if (!placePreview) return;
   const text = normalizeText(placeInput?.value || "");
   placePreview.textContent = text || "未設定";
+}
+
+function applyLineSiteTemplate() {
+  const siteSelect = document.getElementById("lineMapSite");
+  if (!(siteSelect instanceof HTMLSelectElement)) return;
+  const routeName = normalizeText(siteSelect.value);
+  if (!routeName) return;
+  const route = state.routes.find((r) => normalizeText(r.name) === routeName);
+  if (!route) return;
+
+  if (Number.isFinite(Number(route.geoLat)) && Number.isFinite(Number(route.geoLng))) {
+    if (document.getElementById("lineMapStartGeoLat")) document.getElementById("lineMapStartGeoLat").value = Number(route.geoLat).toFixed(6);
+    if (document.getElementById("lineMapStartGeoLng")) document.getElementById("lineMapStartGeoLng").value = Number(route.geoLng).toFixed(6);
+    if (document.getElementById("lineMapStartGeoRadius")) {
+      document.getElementById("lineMapStartGeoRadius").value = String(
+        Number.isFinite(Number(route.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300
+      );
+    }
+    if (document.getElementById("lineMapStartGeoPlaceName")) {
+      document.getElementById("lineMapStartGeoPlaceName").value = normalizeText(route.geoPlaceName || route.name || "");
+    }
+    if (document.getElementById("lineMapStartGeoMapUrl")) {
+      document.getElementById("lineMapStartGeoMapUrl").value = normalizeText(route.geoMapUrl || "");
+    }
+    syncEndLocationFromStart();
+    syncLineMapPlacePreview("lineMapStart");
+    syncLineMapPlacePreview("lineMapEnd");
+    updateLineMapProgress();
+  } else {
+    setStatusBadge("lineMapStartStatus", "warn", "選択した現場に位置情報が未設定です");
+    setStatusBadge("lineMapEndStatus", "warn", "開始地点を設定してください");
+  }
+
+  markLineMapSaveStatus("warn", "編集中（保存してください）");
 }
 
 function reconcileLineDisplayNames() {
@@ -819,52 +835,13 @@ function generateAutoFillCandidates() {
       newCheckOut: plan.end,
       newBreakMin: 60,
       fixStatus: "normal",
-      reason: "不足打刻の下書き作成（シフト予定ベース）",
+      reason: "未打刻日の修正候補（シフト予定ベース）",
       requestType: "auto_fill",
     });
     created += 1;
   });
 
   return created;
-}
-
-function requestMonthUnlock(month) {
-  if (!month) return false;
-  if (!isMonthLocked(month)) {
-    alert("この月はロックされていません。");
-    return false;
-  }
-  if (state.monthUnlockRequests.some((r) => r.month === month && r.status === "申請中")) {
-    alert("この月の解除申請はすでに提出済みです。");
-    return false;
-  }
-  const reason = window.prompt("ロック解除の理由を入力してください", "締め後の打刻漏れ修正のため");
-  if (!reason) return false;
-  state.monthUnlockRequests.push({
-    id: uid("u"),
-    month,
-    reason,
-    status: "申請中",
-    requestedAt: new Date().toLocaleString("ja-JP"),
-  });
-  return true;
-}
-
-function approveMonthUnlock(id) {
-  const req = state.monthUnlockRequests.find((r) => r.id === id);
-  if (!req || req.status !== "申請中") return;
-  state.monthLocks[req.month] = false;
-  req.status = "承認";
-  req.decidedAt = new Date().toLocaleString("ja-JP");
-  renderAll();
-}
-
-function rejectMonthUnlock(id) {
-  const req = state.monthUnlockRequests.find((r) => r.id === id);
-  if (!req || req.status !== "申請中") return;
-  req.status = "却下";
-  req.decidedAt = new Date().toLocaleString("ja-JP");
-  renderAll();
 }
 
 function approveLeaveRequest(id) {
@@ -947,10 +924,16 @@ function populateSelectors() {
     if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
   });
 
-  const lineMapSiteName = document.getElementById("lineMapSiteName");
-  if (lineMapSiteName && !lineMapSiteName.value && routeOptions) {
-    const firstRoute = activeRoutes()[0];
-    if (firstRoute?.name) lineMapSiteName.value = firstRoute.name;
+  const lineMapSite = document.getElementById("lineMapSite");
+  if (lineMapSite) {
+    const prev = lineMapSite.value;
+    lineMapSite.innerHTML = `<option value="">現場を選択</option>${routeOptions}`;
+    if (prev && [...lineMapSite.options].some((o) => o.value === prev)) {
+      lineMapSite.value = prev;
+    } else if (!prev) {
+      const firstRoute = activeRoutes()[0];
+      if (firstRoute?.name) lineMapSite.value = firstRoute.name;
+    }
   }
 }
 
@@ -1013,7 +996,7 @@ function renderDashboard() {
     }));
   renderDonutChart("routeDonutChart", "routeDonutLegend", routeSegments, `${routeSegments.length}件`);
   const routeLabel = document.getElementById("routeRatioLabel");
-  if (routeLabel) routeLabel.textContent = routeSegments.length ? "上位5現場表示" : "データなし";
+  if (routeLabel) routeLabel.textContent = routeSegments.length ? "上位5勤務先を表示" : "データなし";
 
   renderMonthlyTrend(monthRows);
 }
@@ -1174,33 +1157,6 @@ function renderCorrectionDesk() {
         </td>
       </tr>`;
     })
-    .join("");
-}
-
-function renderMonthUnlockRequests() {
-  const body = document.getElementById("monthUnlockRequestBody");
-  if (!body) return;
-  const month = selectedMonth();
-  const rows = state.monthUnlockRequests
-    .filter((r) => r.month === month)
-    .sort((a, b) => String(b.requestedAt || "").localeCompare(String(a.requestedAt || "")));
-  if (!rows.length) {
-    body.innerHTML = '<tr><td class="empty" colspan="5">申請はありません</td></tr>';
-    return;
-  }
-  body.innerHTML = rows
-    .map((r) => `<tr>
-      <td>${r.month}</td>
-      <td>${r.reason || "-"}</td>
-      <td>${r.requestedAt || "-"}</td>
-      <td><span class="badge ${r.status === "承認" ? "ok" : r.status === "却下" ? "danger" : "warn"}">${r.status}</span></td>
-      <td>${
-        r.status === "申請中"
-          ? `<button class="btn" data-approve-unlock="${r.id}">承認</button>
-             <button class="btn btn-ghost" data-reject-unlock="${r.id}">却下</button>`
-          : "-"
-      }</td>
-    </tr>`)
     .join("");
 }
 
@@ -1418,9 +1374,11 @@ function renderMasters() {
   const policyMode = document.getElementById("policyMode");
   const policyBefore = document.getElementById("policyGlobalBefore");
   const policyAfter = document.getElementById("policyGlobalAfter");
+  const alcoholLimitInput = document.getElementById("alcoholLimitInput");
   if (policyMode) policyMode.value = policy.mode;
   if (policyBefore) policyBefore.value = String(policy.globalBeforeMin);
   if (policyAfter) policyAfter.value = String(policy.globalAfterMin);
+  if (alcoholLimitInput) alcoholLimitInput.value = normalizeAlcoholLimit(state.alcoholLimit).toFixed(2);
 
   if (empBody) {
     empBody.innerHTML = state.employees
@@ -1485,7 +1443,7 @@ function renderMasters() {
             (u) => `<tr>
       <td>${u.userId}</td>
       <td>${u.employee || "-"}</td>
-      <td>${u.site || "-"}</td>
+      <td>${displaySiteLabel(u.site)}</td>
       <td>${formatStartGeoCell(u)}</td>
       <td>${formatEndGeoCell(u)}</td>
       <td>${u.startGeoLat || u.geoLat ? (u.endGeoLat ? '<span class="badge ok">開始/退勤 設定済み</span>' : '<span class="badge warn">開始のみ設定</span>') : '<span class="badge warn">未設定</span>'}</td>
@@ -1976,6 +1934,9 @@ function applySnapshot(snapshot) {
   if (snapshot.attendancePolicy) {
     state.attendancePolicy = normalizeAttendancePolicy(snapshot.attendancePolicy);
   }
+  if (snapshot.alcoholLimit !== undefined && snapshot.alcoholLimit !== null) {
+    state.alcoholLimit = normalizeAlcoholLimit(snapshot.alcoholLimit);
+  }
   if (Array.isArray(snapshot.logs)) {
     state.logs = snapshot.logs.map((log) => ({
       employee: log.employee || "-",
@@ -2349,6 +2310,16 @@ async function syncEmployeesToServer() {
   } catch (_e) {}
 }
 
+async function saveAlcoholLimitToServer() {
+  if (!API_ENABLED) return;
+  try {
+    await apiRequest("/api/settings/alcohol-limit", {
+      method: "POST",
+      body: JSON.stringify({ alcoholLimit: normalizeAlcoholLimit(state.alcoholLimit) }),
+    });
+  } catch (_e) {}
+}
+
 async function sendShiftNow(targetDate = "") {
   if (!API_ENABLED) {
     alert("http/https環境で実行してください（file://は不可）");
@@ -2363,6 +2334,9 @@ async function sendShiftNow(targetDate = "") {
     });
     if (status) {
       status.textContent = `配信完了: 対象${data?.targetDate || "-"} / 送信${data?.sentCount || 0}件 / スキップ${data?.skippedCount || 0}件`;
+      if ((data?.sentCount || 0) < 1 && data?.reason) {
+        status.textContent += ` / 理由: ${data.reason}`;
+      }
     }
     fetchShiftDeliveryStatus();
   } catch (_e) {
@@ -2407,9 +2381,16 @@ async function sendShiftRange(targetStartDate = "", targetEndDate = "", employee
       body: JSON.stringify({ targetStartDate, targetEndDate, employee }),
     });
     if (status) {
+      const requestedStart = data?.requestedStartDate || data?.targetStartDate || "-";
+      const requestedEnd = data?.requestedEndDate || data?.targetEndDate || "-";
+      const effectiveStart = data?.targetStartDate || requestedStart;
+      const effectiveEnd = data?.targetEndDate || requestedEnd;
       status.textContent = employee
-        ? `個別期間配信完了: ${employee} / ${data?.targetStartDate || "-"}〜${data?.targetEndDate || "-"} / 送信${data?.sentCount || 0}件${(data?.sentCount || 0) < 1 && data?.reason ? ` / 理由: ${data.reason}` : ""}`
-        : `期間配信完了: ${data?.targetStartDate || "-"}〜${data?.targetEndDate || "-"} / 送信${data?.sentCount || 0}件 / スキップ${data?.skippedCount || 0}件`;
+        ? `個別期間配信完了: ${employee} / ${effectiveStart}〜${effectiveEnd} / 送信${data?.sentCount || 0}件${(data?.sentCount || 0) < 1 && data?.reason ? ` / 理由: ${data.reason}` : ""}`
+        : `期間配信完了: ${effectiveStart}〜${effectiveEnd} / 送信${data?.sentCount || 0}件 / スキップ${data?.skippedCount || 0}件${(data?.sentCount || 0) < 1 && data?.reason ? ` / 理由: ${data.reason}` : ""}`;
+      if ((data?.sentCount || 0) < 1 && data?.reason && (requestedStart !== effectiveStart || requestedEnd !== effectiveEnd)) {
+        status.textContent += ` / 指定期間:${requestedStart}〜${requestedEnd}`;
+      }
     }
     fetchShiftDeliveryStatus();
   } catch (_e) {
@@ -2549,6 +2530,15 @@ function bindMasterEvents() {
     alert("打刻ルールを保存しました。");
   });
 
+  document.getElementById("alcoholPolicyForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const next = normalizeAlcoholLimit(document.getElementById("alcoholLimitInput")?.value || 0);
+    state.alcoholLimit = next;
+    renderAll();
+    saveAlcoholLimitToServer();
+    alert(`飲酒基準値を ${next.toFixed(2)} mg/L に保存しました。`);
+  });
+
   document.getElementById("employeeForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const code = normalizeText(document.getElementById("employeeCode").value);
@@ -2650,7 +2640,7 @@ function bindMasterEvents() {
       }
     }
     const submitBtn = document.querySelector("#shiftPlanForm button[type='submit']");
-    if (submitBtn) submitBtn.textContent = "シフト登録";
+    if (submitBtn) submitBtn.textContent = "シフト作成";
     renderAll();
     syncShiftPlansToServer();
   });
@@ -2739,7 +2729,6 @@ function bindMasterEvents() {
       if (!ok) return;
       state.employees = state.employees.filter((x) => x.id !== row.id);
       state.shiftPlans = state.shiftPlans.filter((s) => s.employee !== row.name);
-      delete state.driverAssignments[row.id];
       delete state.openSessions[row.name];
       if (state.editingShiftId) {
         const editing = state.shiftPlans.find((s) => s.id === state.editingShiftId);
@@ -2840,7 +2829,7 @@ function bindMasterEvents() {
     state.shiftPlans = state.shiftPlans.filter((s) => s.id !== id);
     if (state.editingShiftId === id) state.editingShiftId = "";
     const submitBtn = document.querySelector("#shiftPlanForm button[type='submit']");
-    if (submitBtn) submitBtn.textContent = "シフト登録";
+    if (submitBtn) submitBtn.textContent = "シフト作成";
     renderAll();
     syncShiftPlansToServer();
   });
@@ -2850,7 +2839,7 @@ function bindMasterEvents() {
     const sameEndAsStart = Boolean(document.getElementById("lineMapSameEndAsStart")?.checked);
     const userId = document.getElementById("lineUserIdInput")?.value.trim();
     const employeeId = document.getElementById("lineMapEmployee")?.value;
-    const site = normalizeText(document.getElementById("lineMapSiteName")?.value || "");
+    const site = normalizeText(document.getElementById("lineMapSite")?.value || "");
     const startMapUrl = normalizeText(document.getElementById("lineMapStartGeoMapUrl")?.value || "");
     const startPlaceName = normalizeText(document.getElementById("lineMapStartGeoPlaceName")?.value || "");
     const startGeoLat = Number(document.getElementById("lineMapStartGeoLat")?.value || NaN);
@@ -2909,7 +2898,7 @@ function bindMasterEvents() {
     const input = document.getElementById("lineUserIdInput");
     if (input) input.value = userId;
     const empSelect = document.getElementById("lineMapEmployee");
-    const siteInput = document.getElementById("lineMapSiteName");
+    const siteSelect = document.getElementById("lineMapSite");
     const startMapUrlInput = document.getElementById("lineMapStartGeoMapUrl");
     const startPlaceInput = document.getElementById("lineMapStartGeoPlaceName");
     const startLatInput = document.getElementById("lineMapStartGeoLat");
@@ -2934,7 +2923,7 @@ function bindMasterEvents() {
     const endGeoRadius = target.getAttribute("data-fill-end-geo-radius");
     const sameEndCheckbox = document.getElementById("lineMapSameEndAsStart");
     if (empSelect && empId) empSelect.value = empId;
-    if (siteInput && site) siteInput.value = site;
+    if (siteSelect && site) siteSelect.value = site;
     if (startMapUrlInput && startGeoMapUrl) startMapUrlInput.value = startGeoMapUrl;
     if (startPlaceInput && startGeoPlaceName) startPlaceInput.value = startGeoPlaceName;
     if (startLatInput && startGeoLat) startLatInput.value = startGeoLat;
@@ -2970,18 +2959,6 @@ function bindMasterEvents() {
     }
     const rejectId = target.getAttribute("data-reject-leave");
     if (rejectId) rejectLeaveRequest(rejectId);
-  });
-
-  document.getElementById("monthUnlockRequestBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const approveId = target.getAttribute("data-approve-unlock");
-    if (approveId) {
-      approveMonthUnlock(approveId);
-      return;
-    }
-    const rejectId = target.getAttribute("data-reject-unlock");
-    if (rejectId) rejectMonthUnlock(rejectId);
   });
 
   document.getElementById("sendShiftNowBtn")?.addEventListener("click", () => {
@@ -3133,7 +3110,7 @@ function bindEvents() {
   document.getElementById("generateAutoFillBtn")?.addEventListener("click", () => {
     const created = generateAutoFillCandidates();
     renderAll();
-    alert(created > 0 ? `不足打刻の下書きを ${created} 件作成しました。` : "追加できる不足打刻の下書きはありませんでした。");
+    alert(created > 0 ? `未打刻日の修正候補を ${created} 件作成しました。` : "追加できる未打刻日の修正候補はありませんでした。");
   });
 
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);
@@ -3154,6 +3131,11 @@ function bindEvents() {
     updateLineMapProgress();
     markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
+  document.getElementById("lineMapSite")?.addEventListener("change", () => {
+    applyLineSiteTemplate();
+    updateLineMapProgress();
+    markLineMapSaveStatus("neutral", "未保存");
+  });
   document.getElementById("lineMapSameEndAsStart")?.addEventListener("change", () => {
     applyEndLocationMode();
     markLineMapSaveStatus("neutral", "未保存");
@@ -3161,7 +3143,7 @@ function bindEvents() {
   [
     "lineUserIdInput",
     "lineMapEmployee",
-    "lineMapSiteName",
+    "lineMapSite",
     "lineMapStartGeoMapUrl",
     "lineMapStartGeoRadius",
     "lineMapEndGeoMapUrl",
@@ -3261,6 +3243,7 @@ function bindEvents() {
 
 function init() {
   normalizeEmployeeRows();
+  state.alcoholLimit = normalizeAlcoholLimit(state.alcoholLimit);
   applyTheme(state.theme);
   bindEvents();
   renderAll();
