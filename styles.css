@@ -478,8 +478,20 @@ button {
 
 .master-form {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
+}
+
+.master-form button {
+  min-height: 40px;
+}
+
+.policy-form {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 45%, #fff 55%);
 }
 
 .shift-form {

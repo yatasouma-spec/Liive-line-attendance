@@ -18,6 +18,11 @@ const SHIFT_AUTO_SEND_MINUTE = Number(process.env.SHIFT_AUTO_SEND_MINUTE || 0);
 const ATTENDANCE_CONFIRM_WINDOW_MIN = Number(process.env.ATTENDANCE_CONFIRM_WINDOW_MIN || 2);
 const ALCOHOL_LIMIT = Number(process.env.ALCOHOL_LIMIT || 0);
 const EVIDENCE_RETENTION_DAYS = Number(process.env.EVIDENCE_RETENTION_DAYS || 730);
+const DEFAULT_ATTENDANCE_POLICY = {
+  mode: "payroll_exclude",
+  globalBeforeMin: 10,
+  globalAfterMin: 10,
+};
 
 ensureDataFile();
 
@@ -91,22 +96,26 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         db.alcoholEvidence = db.alcoholEvidence.filter((row) => Number(row.expiresAt || 0) >= Date.now()).slice(-10000);
         delete db.lineWorkflows[userId];
         writeDb(db);
-        const snapshot = processLineAction({
-          employee,
-          site,
-          action: "checkin",
-          source: "LINE",
-          lineUserId: userId,
-          gps: { lat, lng },
-          alcohol: {
-            value: Number(flow.alcoholValue || 0),
-            meterImageId: flow.meterImageId || "",
-            faceImageId: flow.faceImageId || "",
-            retentionDays: EVIDENCE_RETENTION_DAYS,
-          },
-        });
-        const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
-        await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        try {
+          const snapshot = processLineAction({
+            employee,
+            site,
+            action: "checkin",
+            source: "LINE",
+            lineUserId: userId,
+            gps: { lat, lng },
+            alcohol: {
+              value: Number(flow.alcoholValue || 0),
+              meterImageId: flow.meterImageId || "",
+              faceImageId: flow.faceImageId || "",
+              retentionDays: EVIDENCE_RETENTION_DAYS,
+            },
+          });
+          const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
+          await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        } catch (error) {
+          await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+        }
         continue;
       }
       writeDb(db);
@@ -211,15 +220,19 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
           continue;
         }
         writeDb(db);
-        const snapshot = processLineAction({
-          employee: pendingConfirm.employee,
-          site: pendingConfirm.site,
-          action: pendingConfirm.action,
-          source: "LINE",
-          lineUserId: userId,
-        });
-        const msg = `受け付けました: ${pendingConfirm.employee} / ${pendingConfirm.site} / ${actionLabel(pendingConfirm.action)} (${snapshot.lineSync?.time || "-"})`;
-        await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        try {
+          const snapshot = processLineAction({
+            employee: pendingConfirm.employee,
+            site: pendingConfirm.site,
+            action: pendingConfirm.action,
+            source: "LINE",
+            lineUserId: userId,
+          });
+          const msg = `受け付けました: ${pendingConfirm.employee} / ${pendingConfirm.site} / ${actionLabel(pendingConfirm.action)} (${snapshot.lineSync?.time || "-"})`;
+          await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        } catch (error) {
+          await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+        }
         continue;
       }
       await sendLineReply(event.replyToken, `確認中です。「${expected}」を押してください。`, {
@@ -243,22 +256,26 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       const next = advanceCheckinFlow(db, userId, text, profile);
       writeDb(db);
       if (next.finalize) {
-        const snapshot = processLineAction({
-          employee,
-          site,
-          action: "checkin",
-          source: "LINE",
-          lineUserId: userId,
-          gps: next.gps || null,
-          alcohol: {
-            value: next.alcoholValue,
-            meterImageId: next.meterImageId || "",
-            faceImageId: next.faceImageId || "",
-            retentionDays: EVIDENCE_RETENTION_DAYS,
-          },
-        });
-        const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
-        await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        try {
+          const snapshot = processLineAction({
+            employee,
+            site,
+            action: "checkin",
+            source: "LINE",
+            lineUserId: userId,
+            gps: next.gps || null,
+            alcohol: {
+              value: next.alcoholValue,
+              meterImageId: next.meterImageId || "",
+              faceImageId: next.faceImageId || "",
+              retentionDays: EVIDENCE_RETENTION_DAYS,
+            },
+          });
+          const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
+          await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+        } catch (error) {
+          await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+        }
       } else {
         const nextQuickReplyType = /飲酒値/.test(next.message) ? "alcohol" : "attendance";
         await sendLineReply(event.replyToken, next.message, {
@@ -301,9 +318,13 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       continue;
     }
 
-    const snapshot = processLineAction({ employee, site, action, source: "LINE", lineUserId: userId });
-    const msg = `受け付けました: ${employee} / ${site} / ${actionLabel(action)} (${snapshot.lineSync?.time || "-"})`;
-    await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+    try {
+      const snapshot = processLineAction({ employee, site, action, source: "LINE", lineUserId: userId });
+      const msg = `受け付けました: ${employee} / ${site} / ${actionLabel(action)} (${snapshot.lineSync?.time || "-"})`;
+      await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+    } catch (error) {
+      await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+    }
   }
 
   res.json({ ok: true });
@@ -323,11 +344,13 @@ app.get("/api/bootstrap", (_req, res) => {
     logs: db.logs.slice(-200),
     timecards: db.timecards.slice(-1000),
     lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
+    attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
   });
 });
 
 app.post("/api/employees/sync", (req, res) => {
   const employees = Array.isArray(req.body?.employees) ? req.body.employees : [];
+  const attendancePolicy = normalizeAttendancePolicy(req.body?.attendancePolicy);
   const db = readDb();
   db.employeeRules = db.employeeRules || {};
   employees.forEach((e) => {
@@ -339,8 +362,11 @@ app.post("/api/employees/sync", (req, res) => {
       active: e?.active !== false,
       workStart: String(e?.workStart || "09:00"),
       workEnd: String(e?.workEnd || "17:00"),
+      bufferBeforeMin: normalizeOptionalMinute(e?.bufferBeforeMin),
+      bufferAfterMin: normalizeOptionalMinute(e?.bufferAfterMin),
     };
   });
+  db.attendancePolicy = attendancePolicy;
   writeDb(db);
   res.json({ ok: true, count: Object.keys(db.employeeRules).length });
 });
@@ -411,15 +437,19 @@ app.post("/api/line-action", (req, res) => {
   if ((action === "checkin" || action === "checkout") && confirm !== true) {
     return res.status(400).json({ ok: false, error: "confirm is required for checkin/checkout" });
   }
-  const snapshot = processLineAction({
-    employee,
-    site,
-    action,
-    source: "WEB",
-    gps: gps || null,
-    alcohol: alcohol || null,
-  });
-  res.json({ ok: true, snapshot });
+  try {
+    const snapshot = processLineAction({
+      employee,
+      site,
+      action,
+      source: "WEB",
+      gps: gps || null,
+      alcohol: alcohol || null,
+    });
+    res.json({ ok: true, snapshot });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || "打刻できませんでした。") });
+  }
 });
 
 app.get("/api/line/users", (_req, res) => {
@@ -630,19 +660,64 @@ app.post("/api/timecards/overtime-review", (req, res) => {
   if (action === "approve") {
     row.overtimeApprovalStatus = "approved";
     row.overtimeApprovedAt = new Date().toISOString();
-  } else {
-    const fallbackEnd = String(row.scheduledEnd || "17:00");
-    if (isValidHHMM(row.checkIn) && isValidHHMM(fallbackEnd)) {
-      const recalc = recalcAttendanceByRule(row.date, row.checkIn, fallbackEnd, Number(row.breakMin || 0), row.employee, db);
-      row.checkOut = fallbackEnd;
+    const sourceCheckIn = String(row.actualCheckIn || row.checkIn || "");
+    const sourceCheckOut = String(row.actualCheckOut || row.checkOut || "");
+    if (isValidHHMM(sourceCheckIn) && isValidHHMM(sourceCheckOut)) {
+      const recalc = recalcAttendanceByRule(
+        row.date,
+        sourceCheckIn,
+        sourceCheckOut,
+        Number(row.breakMin || 0),
+        row.employee,
+        db,
+        { overtimeApproved: true }
+      );
+      row.checkIn = sourceCheckIn;
+      row.checkOut = sourceCheckOut;
+      row.actualCheckIn = sourceCheckIn;
+      row.actualCheckOut = sourceCheckOut;
       row.hours = recalc.hours;
+      row.actualHours = recalc.actualHours;
+      row.requestedOvertimeHours = recalc.requestedOvertimeHours;
       row.overtime = recalc.overtime;
       row.isLate = recalc.isLate;
       row.payrollEligible = recalc.payrollEligible;
-      row.payrollRule = recalc.payrollEligible ? "normal_window" : "outside_window";
+      row.payrollRule = recalc.payrollRule;
       row.scheduledStart = recalc.scheduledStart;
       row.scheduledEnd = recalc.scheduledEnd;
       row.scheduledHours = recalc.scheduledHours;
+      row.payrollCheckIn = recalc.payrollCheckIn;
+      row.payrollCheckOut = recalc.payrollCheckOut;
+    }
+  } else {
+    const sourceCheckIn = String(row.actualCheckIn || row.checkIn || "");
+    const sourceCheckOut = String(row.actualCheckOut || row.checkOut || "");
+    if (isValidHHMM(sourceCheckIn) && isValidHHMM(sourceCheckOut)) {
+      const recalc = recalcAttendanceByRule(
+        row.date,
+        sourceCheckIn,
+        sourceCheckOut,
+        Number(row.breakMin || 0),
+        row.employee,
+        db,
+        { overtimeApproved: false }
+      );
+      row.checkIn = sourceCheckIn;
+      row.checkOut = sourceCheckOut;
+      row.actualCheckIn = sourceCheckIn;
+      row.actualCheckOut = sourceCheckOut;
+      row.hours = recalc.hours;
+      row.actualHours = recalc.actualHours;
+      row.requestedOvertimeHours = recalc.requestedOvertimeHours;
+      row.overtime = recalc.overtime;
+      row.isLate = recalc.isLate;
+      row.payrollEligible = recalc.payrollEligible;
+      row.payrollRule = recalc.payrollRule;
+      row.scheduledStart = recalc.scheduledStart;
+      row.scheduledEnd = recalc.scheduledEnd;
+      row.scheduledHours = recalc.scheduledHours;
+      row.payrollCheckIn = recalc.payrollCheckIn;
+      row.payrollCheckOut = recalc.payrollCheckOut;
     }
     row.overtimeApprovalStatus = "rejected";
     row.overtimeRejectedAt = new Date().toISOString();
@@ -656,6 +731,7 @@ app.post("/api/timecards/overtime-review", (req, res) => {
       logs: db.logs.slice(-200),
       timecards: db.timecards.slice(-1000),
       lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
+      attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
     },
   });
 });
@@ -1019,6 +1095,15 @@ function processLineAction({ employee, site, action, source, lineUserId = "", gp
   const sessionEmployee = userCheckin?.employeeName || employee;
 
   if (action === "checkin") {
+    const currentRule = getEmployeeRuleFromDb(db, employee);
+    const window = evaluateCheckInWindow(nowJst.minutes, currentRule);
+    if (normalizePolicyMode(currentRule.mode) === "block" && !window.within) {
+      throw new Error(
+        window.reason === "early_outside"
+          ? `出勤打刻が早すぎます（許容: ${window.beforeMin}分前まで）。`
+          : `出勤打刻が遅すぎます（許容: ${window.afterMin}分後まで）。`
+      );
+    }
     db.checkins[sessionKey] = {
       checkInISO: now.toISOString(),
       checkInMinutes: nowJst.minutes,
@@ -1084,17 +1169,23 @@ function processLineAction({ employee, site, action, source, lineUserId = "", gp
         lineUserId: lineUserId || userCheckin.lineUserId || null,
         checkIn: checkInJst.time,
         checkOut: time,
+        actualCheckIn: checkInJst.time,
+        actualCheckOut: time,
         hours: recalc.hours,
+        actualHours: recalc.actualHours,
         breakMin,
         overtime: recalc.overtime,
+        requestedOvertimeHours: recalc.requestedOvertimeHours,
         isLate: recalc.isLate,
         payrollEligible: recalc.payrollEligible,
-        payrollRule: recalc.payrollEligible ? "normal_window" : "outside_window",
+        payrollRule: recalc.payrollRule,
         scheduledStart: recalc.scheduledStart,
         scheduledEnd: recalc.scheduledEnd,
         scheduledHours: recalc.scheduledHours,
-        overtimeApprovalStatus: recalc.exceededScheduledEnd ? "pending" : "none",
-        overtimeRequestedAt: recalc.exceededScheduledEnd ? now.toISOString() : null,
+        overtimeApprovalStatus: recalc.overtimeNeedsApproval ? "pending" : "none",
+        overtimeRequestedAt: recalc.overtimeNeedsApproval ? now.toISOString() : null,
+        payrollCheckIn: recalc.payrollCheckIn,
+        payrollCheckOut: recalc.payrollCheckOut,
         checkInGps: userCheckin.checkInGps || null,
         alcohol: userCheckin.alcohol || null,
       };
@@ -1135,6 +1226,7 @@ function processLineAction({ employee, site, action, source, lineUserId = "", gp
     lineSync: db.lineSync,
     logs: db.logs.slice(-200),
     timecards: db.timecards.slice(-1000),
+    attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
   };
 }
 
@@ -1603,6 +1695,8 @@ function ensureDataFile() {
       lastLocations: {},
       lineCorrectionRequests: [],
       alcoholEvidence: [],
+      employeeRules: {},
+      attendancePolicy: { ...DEFAULT_ATTENDANCE_POLICY },
     });
   }
 }
@@ -1626,6 +1720,7 @@ function readDb() {
       parsed.lineCorrectionRequests = Array.isArray(parsed.lineCorrectionRequests) ? parsed.lineCorrectionRequests : [];
       parsed.alcoholEvidence = Array.isArray(parsed.alcoholEvidence) ? parsed.alcoholEvidence : [];
       parsed.employeeRules = parsed.employeeRules || {};
+      parsed.attendancePolicy = normalizeAttendancePolicy(parsed.attendancePolicy);
       parsed.timecards = parsed.timecards.map((row) => ({
         ...row,
         sourceKey: row.sourceKey || buildTimecardSourceKey(row),
@@ -1649,6 +1744,7 @@ function readDb() {
     lineCorrectionRequests: [],
     alcoholEvidence: [],
     employeeRules: {},
+    attendancePolicy: { ...DEFAULT_ATTENDANCE_POLICY },
   };
 }
 
@@ -1668,6 +1764,33 @@ function isValidHHMM(text) {
   return /^\d{2}:\d{2}$/.test(String(text || ""));
 }
 
+function normalizePolicyMode(value) {
+  const mode = String(value || "").trim();
+  if (mode === "warning_only" || mode === "payroll_exclude" || mode === "block") return mode;
+  return "payroll_exclude";
+}
+
+function clampMinute(value, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(180, Math.max(0, Math.round(num)));
+}
+
+function normalizeOptionalMinute(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.min(180, Math.max(0, Math.round(num)));
+}
+
+function normalizeAttendancePolicy(raw) {
+  return {
+    mode: normalizePolicyMode(raw?.mode),
+    globalBeforeMin: clampMinute(raw?.globalBeforeMin, DEFAULT_ATTENDANCE_POLICY.globalBeforeMin),
+    globalAfterMin: clampMinute(raw?.globalAfterMin, DEFAULT_ATTENDANCE_POLICY.globalAfterMin),
+  };
+}
+
 function minutesFromHHMM(hhmm) {
   if (!isValidHHMM(hhmm)) return null;
   const [h, m] = String(hhmm).split(":").map(Number);
@@ -1677,9 +1800,22 @@ function minutesFromHHMM(hhmm) {
 
 function getEmployeeRuleFromDb(db, employeeName) {
   const rule = db?.employeeRules?.[employeeName] || {};
+  const policy = normalizeAttendancePolicy(db?.attendancePolicy);
   const workStart = isValidHHMM(rule.workStart) ? rule.workStart : "09:00";
   const workEnd = isValidHHMM(rule.workEnd) ? rule.workEnd : "17:00";
-  return { workStart, workEnd };
+  return {
+    workStart,
+    workEnd,
+    bufferBeforeMin:
+      Number.isFinite(Number(rule.bufferBeforeMin)) && rule.bufferBeforeMin !== null
+        ? Number(rule.bufferBeforeMin)
+        : policy.globalBeforeMin,
+    bufferAfterMin:
+      Number.isFinite(Number(rule.bufferAfterMin)) && rule.bufferAfterMin !== null
+        ? Number(rule.bufferAfterMin)
+        : policy.globalAfterMin,
+    mode: policy.mode,
+  };
 }
 
 function calcScheduledMinutes(workStart, workEnd) {
@@ -1690,46 +1826,126 @@ function calcScheduledMinutes(workStart, workEnd) {
   return Math.max(60, diff);
 }
 
-function isPayrollEligibleByRule(checkInMinutes, workStartMinutes) {
-  const start = Number.isFinite(workStartMinutes) ? workStartMinutes : 9 * 60;
-  return checkInMinutes >= start - 10 && checkInMinutes <= start + 10;
+function hhmmFromMinutes(totalMinutes) {
+  if (!Number.isFinite(totalMinutes)) return "00:00";
+  const normalized = ((Math.round(totalMinutes) % (24 * 60)) + 24 * 60) % (24 * 60);
+  const h = Math.floor(normalized / 60);
+  const m = normalized % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function recalcAttendanceByRule(date, checkIn, checkOut, breakMin, employeeName, db) {
+function durationMinutes(startMin, endMin) {
+  if (!Number.isFinite(startMin) || !Number.isFinite(endMin)) return 0;
+  return Math.max(0, endMin - startMin);
+}
+
+function evaluateCheckInWindow(checkInMin, rule) {
+  const startMin = minutesFromHHMM(rule.workStart);
+  const beforeMin = clampMinute(rule.bufferBeforeMin, DEFAULT_ATTENDANCE_POLICY.globalBeforeMin);
+  const afterMin = clampMinute(rule.bufferAfterMin, DEFAULT_ATTENDANCE_POLICY.globalAfterMin);
+  if (!Number.isFinite(checkInMin) || startMin === null) {
+    return {
+      within: false,
+      reason: "invalid",
+      startMin,
+      beforeMin,
+      afterMin,
+    };
+  }
+  const minAllowed = startMin - beforeMin;
+  const maxAllowed = startMin + afterMin;
+  if (checkInMin < minAllowed) {
+    return { within: false, reason: "early_outside", startMin, beforeMin, afterMin };
+  }
+  if (checkInMin > maxAllowed) {
+    return { within: false, reason: "late_outside", startMin, beforeMin, afterMin };
+  }
+  return { within: true, reason: "within_window", startMin, beforeMin, afterMin };
+}
+
+function recalcAttendanceByRule(date, checkIn, checkOut, breakMin, employeeName, db, options = {}) {
   if (!isValidHHMM(checkIn) || !isValidHHMM(checkOut)) {
     return {
       hours: 0,
+      actualHours: 0,
       overtime: 0,
+      requestedOvertimeHours: 0,
       isLate: false,
       payrollEligible: false,
+      payrollRule: "invalid",
       scheduledStart: "09:00",
       scheduledEnd: "17:00",
       scheduledHours: 8,
       exceededScheduledEnd: false,
+      overtimeNeedsApproval: false,
+      payrollCheckIn: "00:00",
+      payrollCheckOut: "00:00",
+      blocked: false,
+      blockedReason: "",
     };
   }
-  const checkInAt = new Date(`${date}T${checkIn}:00`);
-  const checkOutAt = new Date(`${date}T${checkOut}:00`);
-  const rawHours = (checkOutAt.getTime() - checkInAt.getTime()) / 3600000;
-  const hours = Math.max(0.5, Number((rawHours - Number(breakMin || 0) / 60).toFixed(1)));
 
   const rule = getEmployeeRuleFromDb(db, employeeName);
+  const mode = normalizePolicyMode(rule.mode);
   const startMin = minutesFromHHMM(checkIn);
   const endMin = minutesFromHHMM(checkOut);
   const scheduledStartMin = minutesFromHHMM(rule.workStart);
   const scheduledEndMin = minutesFromHHMM(rule.workEnd);
   const scheduledMinutes = calcScheduledMinutes(rule.workStart, rule.workEnd);
   const scheduledHours = Number((scheduledMinutes / 60).toFixed(1));
+  const window = evaluateCheckInWindow(startMin, rule);
+  const blockByWindow = mode === "block" && !window.within;
+  const overtimeApproved = options.overtimeApproved === true;
+
+  const breakHours = Number(breakMin || 0) / 60;
+  const actualDiffHours = durationMinutes(startMin, endMin) / 60;
+  const actualHours = Number(Math.max(0.5, actualDiffHours - breakHours).toFixed(1));
+
+  let payrollStartMin = startMin;
+  if (mode !== "warning_only" && scheduledStartMin !== null) {
+    if (startMin <= scheduledStartMin + window.afterMin) {
+      payrollStartMin = scheduledStartMin;
+    }
+  }
+
+  const exceededScheduledEnd = scheduledEndMin !== null && endMin > scheduledEndMin + window.afterMin;
+  let payrollEndMin = endMin;
+  if (mode !== "warning_only" && scheduledEndMin !== null) {
+    const nearScheduledEnd = endMin >= scheduledEndMin - window.afterMin && endMin <= scheduledEndMin + window.afterMin;
+    if (nearScheduledEnd) {
+      payrollEndMin = scheduledEndMin;
+    }
+    if (exceededScheduledEnd && !overtimeApproved) {
+      payrollEndMin = scheduledEndMin;
+    }
+  }
+
+  const payrollDiffHours = durationMinutes(payrollStartMin, payrollEndMin) / 60;
+  const hours = Number(Math.max(0.5, payrollDiffHours - breakHours).toFixed(1));
+  const requestedOvertimeHours = Number(Math.max(0, actualHours - scheduledHours).toFixed(1));
+  const overtime = Number(Math.max(0, hours - scheduledHours).toFixed(1));
 
   return {
     hours,
-    overtime: Number(Math.max(0, hours - scheduledHours).toFixed(1)),
-    isLate: startMin !== null && scheduledStartMin !== null ? startMin > scheduledStartMin : false,
-    payrollEligible: startMin !== null ? isPayrollEligibleByRule(startMin, scheduledStartMin) : false,
+    actualHours,
+    overtime,
+    requestedOvertimeHours,
+    isLate: startMin !== null && scheduledStartMin !== null ? startMin > scheduledStartMin + window.afterMin : false,
+    payrollEligible: mode === "block" ? window.within : true,
+    payrollRule: window.reason,
     scheduledStart: rule.workStart,
     scheduledEnd: rule.workEnd,
     scheduledHours,
-    exceededScheduledEnd: endMin !== null && scheduledEndMin !== null ? endMin > scheduledEndMin : false,
+    exceededScheduledEnd,
+    overtimeNeedsApproval: mode !== "warning_only" && exceededScheduledEnd,
+    payrollCheckIn: hhmmFromMinutes(payrollStartMin),
+    payrollCheckOut: hhmmFromMinutes(payrollEndMin),
+    blocked: blockByWindow,
+    blockedReason: blockByWindow
+      ? window.reason === "early_outside"
+        ? `出勤時刻が早すぎます（許容: ${window.beforeMin}分前まで）`
+        : `出勤時刻が遅すぎます（許容: ${window.afterMin}分後まで）`
+      : "",
   };
 }
 

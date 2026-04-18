@@ -15,6 +15,7 @@ const SHIFT_PLAN_KEY = "liiveAttendanceShiftPlansV1";
 const GPS_EVENT_KEY = "liiveAttendanceGpsByEventV1";
 const OPEN_SESSION_KEY = "liiveAttendanceOpenSessionsV1";
 const THEME_KEY = "liiveAttendanceThemeV1";
+const ATTENDANCE_POLICY_KEY = "liiveAttendancePolicyV1";
 
 const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
@@ -38,6 +39,12 @@ const defaultVehicles = [
   { id: "v1", plate: "品川500 あ 12-34", name: "2tパッカーA", active: true },
   { id: "v2", plate: "品川500 い 56-78", name: "4tパッカーB", active: true },
 ];
+
+const defaultAttendancePolicy = {
+  mode: "payroll_exclude",
+  globalBeforeMin: 10,
+  globalAfterMin: 10,
+};
 
 function loadJson(key, fallback) {
   try {
@@ -70,6 +77,7 @@ const state = {
   lineUsers: [],
   editingShiftId: "",
   theme: loadJson(THEME_KEY, "blue"),
+  attendancePolicy: loadJson(ATTENDANCE_POLICY_KEY, defaultAttendancePolicy),
 };
 
 const viewTitle = {
@@ -92,7 +100,10 @@ function normalizeEmployeeRows() {
     active: e.active !== false,
     workStart: normalizeText(e.workStart || "09:00"),
     workEnd: normalizeText(e.workEnd || "17:00"),
+    bufferBeforeMin: normalizeOptionalMinute(e.bufferBeforeMin),
+    bufferAfterMin: normalizeOptionalMinute(e.bufferAfterMin),
   }));
+  state.attendancePolicy = normalizeAttendancePolicy(state.attendancePolicy);
 }
 
 function persist() {
@@ -113,6 +124,34 @@ function persist() {
   localStorage.setItem(LEAVE_REQUEST_KEY, JSON.stringify(state.leaveRequests));
   localStorage.setItem(MONTH_UNLOCK_REQ_KEY, JSON.stringify(state.monthUnlockRequests));
   localStorage.setItem(THEME_KEY, JSON.stringify(state.theme));
+  localStorage.setItem(ATTENDANCE_POLICY_KEY, JSON.stringify(normalizeAttendancePolicy(state.attendancePolicy)));
+}
+
+function normalizePolicyMode(value) {
+  const mode = normalizeText(value);
+  if (mode === "warning_only" || mode === "payroll_exclude" || mode === "block") return mode;
+  return "payroll_exclude";
+}
+
+function clampMinute(value, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(180, Math.max(0, Math.round(num)));
+}
+
+function normalizeOptionalMinute(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.min(180, Math.max(0, Math.round(num)));
+}
+
+function normalizeAttendancePolicy(raw) {
+  return {
+    mode: normalizePolicyMode(raw?.mode),
+    globalBeforeMin: clampMinute(raw?.globalBeforeMin, 10),
+    globalAfterMin: clampMinute(raw?.globalAfterMin, 10),
+  };
 }
 
 function uid(prefix) {
@@ -164,9 +203,13 @@ function getEmployeeCode(name) {
 
 function getEmployeeRule(name) {
   const row = state.employees.find((e) => e.name === name);
+  const policy = normalizeAttendancePolicy(state.attendancePolicy);
   return {
     workStart: normalizeText(row?.workStart || "09:00"),
     workEnd: normalizeText(row?.workEnd || "17:00"),
+    bufferBeforeMin: Number.isFinite(Number(row?.bufferBeforeMin)) ? Number(row.bufferBeforeMin) : policy.globalBeforeMin,
+    bufferAfterMin: Number.isFinite(Number(row?.bufferAfterMin)) ? Number(row.bufferAfterMin) : policy.globalAfterMin,
+    mode: policy.mode,
   };
 }
 
@@ -176,6 +219,38 @@ function computeScheduledMinutes(workStart, workEnd) {
   if (s === null || e === null) return 8 * 60;
   const diff = e >= s ? e - s : e + 24 * 60 - s;
   return Math.max(60, diff);
+}
+
+function hhmmFromMinutes(totalMinutes) {
+  if (!Number.isFinite(totalMinutes)) return "00:00";
+  const normalized = ((Math.round(totalMinutes) % (24 * 60)) + 24 * 60) % (24 * 60);
+  const h = Math.floor(normalized / 60);
+  const m = normalized % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function evaluateCheckInWindow(checkInMin, rule) {
+  const startMin = minutesFromHHMM(rule.workStart);
+  const beforeMin = clampMinute(rule.bufferBeforeMin, 10);
+  const afterMin = clampMinute(rule.bufferAfterMin, 10);
+  if (!Number.isFinite(checkInMin) || startMin === null) {
+    return {
+      within: false,
+      reason: "invalid",
+      startMin,
+      beforeMin,
+      afterMin,
+    };
+  }
+  const minAllowed = startMin - beforeMin;
+  const maxAllowed = startMin + afterMin;
+  if (checkInMin < minAllowed) {
+    return { within: false, reason: "early_outside", startMin, beforeMin, afterMin };
+  }
+  if (checkInMin > maxAllowed) {
+    return { within: false, reason: "late_outside", startMin, beforeMin, afterMin };
+  }
+  return { within: true, reason: "within_window", startMin, beforeMin, afterMin };
 }
 
 function getVehicleById(id) {
@@ -431,16 +506,78 @@ function renameRouteReferences(oldRoute, newRoute) {
   });
 }
 
-function isPayrollEligibleByWindow(minutes, scheduledStartMinutes = null) {
-  const base = Number.isFinite(Number(scheduledStartMinutes)) ? Number(scheduledStartMinutes) : 9 * 60;
-  return Number(minutes) >= base - 10 && Number(minutes) <= base + 10;
-}
-
 function isPayrollEligibleRow(row) {
   if (typeof row.payrollEligible === "boolean") return row.payrollEligible;
   const m = minutesFromHHMM(row.checkIn || "");
   if (m === null) return false;
-  return isPayrollEligibleByWindow(m);
+  const rule = getEmployeeRule(row.employee || "");
+  const window = evaluateCheckInWindow(m, rule);
+  return rule.mode === "block" ? window.within : true;
+}
+
+function computeAttendanceMetrics(date, checkIn, checkOut, breakMin, employeeName = "", options = {}) {
+  const start = new Date(`${date}T${checkIn}:00`);
+  const end = new Date(`${date}T${checkOut}:00`);
+  const diffHours = Math.max(0, (end.getTime() - start.getTime()) / 3600000 - Number(breakMin || 0) / 60);
+  const actualHours = Number(Math.max(0.5, diffHours).toFixed(1));
+  const rule = getEmployeeRule(employeeName);
+  const mode = normalizePolicyMode(rule.mode);
+  const startMin = start.getHours() * 60 + start.getMinutes();
+  const endMin = end.getHours() * 60 + end.getMinutes();
+  const scheduledStartMin = minutesFromHHMM(rule.workStart);
+  const scheduledEndMin = minutesFromHHMM(rule.workEnd);
+  const scheduledMinutes = computeScheduledMinutes(rule.workStart, rule.workEnd);
+  const scheduledHours = Number((scheduledMinutes / 60).toFixed(1));
+  const window = evaluateCheckInWindow(startMin, rule);
+  const blockByWindow = mode === "block" && !window.within;
+  const overtimeApproved = options.overtimeApproved === true;
+
+  let payrollStartMin = startMin;
+  if (mode !== "warning_only" && scheduledStartMin !== null) {
+    if (startMin <= scheduledStartMin + window.afterMin) {
+      payrollStartMin = scheduledStartMin;
+    }
+  }
+
+  const exceededScheduledEnd = scheduledEndMin !== null && endMin > scheduledEndMin + window.afterMin;
+  let payrollEndMin = endMin;
+  if (mode !== "warning_only" && scheduledEndMin !== null) {
+    const nearScheduledEnd = endMin >= scheduledEndMin - window.afterMin && endMin <= scheduledEndMin + window.afterMin;
+    if (nearScheduledEnd) {
+      payrollEndMin = scheduledEndMin;
+    }
+    if (exceededScheduledEnd && !overtimeApproved) {
+      payrollEndMin = scheduledEndMin;
+    }
+  }
+
+  const payrollDiffHours = Math.max(0, (payrollEndMin - payrollStartMin) / 60 - Number(breakMin || 0) / 60);
+  const payrollHours = Number(Math.max(0.5, payrollDiffHours).toFixed(1));
+  const requestedOvertimeHours = Number(Math.max(0, actualHours - scheduledHours).toFixed(1));
+  const overtime = Number(Math.max(0, payrollHours - scheduledHours).toFixed(1));
+
+  return {
+    hours: payrollHours,
+    actualHours,
+    overtime,
+    requestedOvertimeHours,
+    isLate: scheduledStartMin !== null ? startMin > scheduledStartMin + window.afterMin : startMin > 9 * 60,
+    payrollEligible: mode === "block" ? window.within : true,
+    payrollRule: window.reason,
+    scheduledStart: rule.workStart,
+    scheduledEnd: rule.workEnd,
+    scheduledHours,
+    exceededScheduledEnd,
+    overtimeNeedsApproval: mode !== "warning_only" && exceededScheduledEnd,
+    payrollCheckIn: hhmmFromMinutes(payrollStartMin),
+    payrollCheckOut: hhmmFromMinutes(payrollEndMin),
+    blocked: blockByWindow,
+    blockedReason: blockByWindow
+      ? window.reason === "early_outside"
+        ? `出勤時刻が早すぎます（許容: ${window.beforeMin}分前まで）`
+        : `出勤時刻が遅すぎます（許容: ${window.afterMin}分後まで）`
+      : "",
+  };
 }
 
 function formatGeoDisplay(placeNameRaw, latRaw, lngRaw, radiusRaw) {
@@ -477,6 +614,17 @@ function formatStartGeoCell(row) {
 
 function formatEndGeoCell(row) {
   return formatGeoDisplay(row?.endGeoPlaceName, row?.endGeoLat, row?.endGeoLng, row?.endGeoRadiusM);
+}
+
+function employeeBufferLabel(employeeRow) {
+  const policy = normalizeAttendancePolicy(state.attendancePolicy);
+  const before = Number.isFinite(Number(employeeRow?.bufferBeforeMin))
+    ? Number(employeeRow.bufferBeforeMin)
+    : policy.globalBeforeMin;
+  const after = Number.isFinite(Number(employeeRow?.bufferAfterMin))
+    ? Number(employeeRow.bufferAfterMin)
+    : policy.globalAfterMin;
+  return `前${before}分 / 後${after}分`;
 }
 
 function sourceKey(row) {
@@ -525,7 +673,15 @@ async function apiRequest(path, options = {}) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
-  if (!response.ok) throw new Error(`API ${response.status}`);
+  if (!response.ok) {
+    let message = `API ${response.status}`;
+    try {
+      const body = await response.json();
+      if (body?.message) message = body.message;
+      else if (body?.error) message = body.error;
+    } catch (_e) {}
+    throw new Error(message);
+  }
   return response.json();
 }
 
@@ -1257,6 +1413,14 @@ function renderMasters() {
   const routeBody = document.getElementById("routeMasterBody");
   const shiftBody = document.getElementById("shiftPlanBody");
   const lineUsersBody = document.getElementById("lineUsersBody");
+  const policy = normalizeAttendancePolicy(state.attendancePolicy);
+
+  const policyMode = document.getElementById("policyMode");
+  const policyBefore = document.getElementById("policyGlobalBefore");
+  const policyAfter = document.getElementById("policyGlobalAfter");
+  if (policyMode) policyMode.value = policy.mode;
+  if (policyBefore) policyBefore.value = String(policy.globalBeforeMin);
+  if (policyAfter) policyAfter.value = String(policy.globalAfterMin);
 
   if (empBody) {
     empBody.innerHTML = state.employees
@@ -1265,6 +1429,7 @@ function renderMasters() {
       <td>${e.code}</td>
       <td>${e.name}</td>
       <td>${normalizeText(e.workStart || "09:00")} - ${normalizeText(e.workEnd || "17:00")}</td>
+      <td>${employeeBufferLabel(e)}</td>
       <td><span class="badge ${e.active ? "ok" : "warn"}">${e.active ? "有効" : "無効"}</span></td>
       <td>
         <button class="btn btn-ghost" data-edit-emp="${e.id}">編集</button>
@@ -1498,27 +1663,9 @@ function exportAuditPackage() {
 }
 
 function recalcByTimes(date, checkIn, checkOut, breakMin, employeeName = "") {
-  const start = new Date(`${date}T${checkIn}:00`);
-  const end = new Date(`${date}T${checkOut}:00`);
-  const diffHours = Math.max(0, (end.getTime() - start.getTime()) / 3600000 - breakMin / 60);
-  const hours = Number(Math.max(0.5, diffHours).toFixed(1));
-  const rule = getEmployeeRule(employeeName);
-  const startMin = start.getHours() * 60 + start.getMinutes();
-  const endMin = end.getHours() * 60 + end.getMinutes();
-  const scheduledMinutes = computeScheduledMinutes(rule.workStart, rule.workEnd);
-  const scheduledHours = Number((scheduledMinutes / 60).toFixed(1));
-  const scheduledEndMin = minutesFromHHMM(rule.workEnd);
-  const exceededScheduledEnd = scheduledEndMin !== null ? endMin > scheduledEndMin : false;
-  return {
-    hours,
-    overtime: Number(Math.max(0, hours - scheduledHours).toFixed(1)),
-    isLate: minutesFromHHMM(rule.workStart) !== null ? startMin > minutesFromHHMM(rule.workStart) : startMin > 9 * 60,
-    payrollEligible: isPayrollEligibleByWindow(startMin, minutesFromHHMM(rule.workStart)),
-    scheduledStart: rule.workStart,
-    scheduledEnd: rule.workEnd,
-    scheduledHours,
-    exceededScheduledEnd,
-  };
+  return computeAttendanceMetrics(date, checkIn, checkOut, breakMin, employeeName, {
+    overtimeApproved: false,
+  });
 }
 
 function isValidTimeText(text) {
@@ -1738,13 +1885,19 @@ function approveCorrection(id, override = null) {
         ? recalcByTimes(req.date, nextCheckIn, nextCheckOut, nextBreakMin, req.employee)
         : {
             hours: 0,
+            actualHours: 0,
             overtime: 0,
+            requestedOvertimeHours: 0,
             isLate: false,
             payrollEligible: false,
+            payrollRule: "manual_only",
             scheduledStart: getEmployeeRule(req.employee).workStart,
             scheduledEnd: getEmployeeRule(req.employee).workEnd,
             scheduledHours: Number((computeScheduledMinutes(getEmployeeRule(req.employee).workStart, getEmployeeRule(req.employee).workEnd) / 60).toFixed(1)),
             exceededScheduledEnd: false,
+            overtimeNeedsApproval: false,
+            payrollCheckIn: "-",
+            payrollCheckOut: "-",
           };
 
     corrected = {
@@ -1755,19 +1908,23 @@ function approveCorrection(id, override = null) {
       checkIn: nextCheckIn || "-",
       checkOut: nextCheckOut || "-",
       breakMin: nextBreakMin,
+      actualHours: recalc.actualHours,
       hours: recalc.hours,
       overtime: recalc.overtime,
+      requestedOvertimeHours: recalc.requestedOvertimeHours,
       isLate: recalc.isLate,
       payrollEligible: recalc.payrollEligible,
-      payrollRule: recalc.payrollEligible ? "normal_window" : "outside_window",
+      payrollRule: recalc.payrollRule,
       scheduledStart: recalc.scheduledStart,
       scheduledEnd: recalc.scheduledEnd,
       scheduledHours: recalc.scheduledHours,
+      payrollCheckIn: recalc.payrollCheckIn,
+      payrollCheckOut: recalc.payrollCheckOut,
       corrected: true,
       correctionReason: payload.reason,
       correctionStatus: fixStatus,
       correctedAt: new Date().toISOString(),
-      overtimeApprovalStatus: fixStatus === "normal" && recalc.exceededScheduledEnd ? "pending" : "none",
+      overtimeApprovalStatus: fixStatus === "normal" && recalc.overtimeNeedsApproval ? "pending" : "none",
     };
     corrected.sourceKey = req.sourceKey || sourceKey(corrected);
     state.approvedCorrectionMap[corrected.sourceKey] = corrected;
@@ -1816,6 +1973,9 @@ function rejectCorrection(id) {
 
 function applySnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
+  if (snapshot.attendancePolicy) {
+    state.attendancePolicy = normalizeAttendancePolicy(snapshot.attendancePolicy);
+  }
   if (Array.isArray(snapshot.logs)) {
     state.logs = snapshot.logs.map((log) => ({
       employee: log.employee || "-",
@@ -1885,7 +2045,7 @@ function mergeOvertimePendingRequests() {
           newCheckOut: row.checkOut || "-",
           newBreakMin: Number(row.breakMin || 0),
           fixStatus: "normal",
-          reason: `残業承認待ち（実績 ${Number(row.overtime || 0).toFixed(1)}h）`,
+          reason: `残業承認待ち（実績 ${Number(row.requestedOvertimeHours ?? row.overtime ?? 0).toFixed(1)}h）`,
           requestType: "overtime_review",
         };
         return [request.id, request];
@@ -1920,6 +2080,23 @@ async function resolveOvertimeReview(req, approve) {
   if (!row) return;
 
   if (approve) {
+    if (isValidTimeText(row.checkIn || "") && isValidTimeText(row.checkOut || "")) {
+      const recalc = computeAttendanceMetrics(row.date, row.checkIn, row.checkOut, Number(row.breakMin || 0), row.employee, {
+        overtimeApproved: true,
+      });
+      row.actualHours = recalc.actualHours;
+      row.hours = recalc.hours;
+      row.overtime = recalc.overtime;
+      row.requestedOvertimeHours = recalc.requestedOvertimeHours;
+      row.isLate = recalc.isLate;
+      row.payrollEligible = recalc.payrollEligible;
+      row.payrollRule = recalc.payrollRule;
+      row.scheduledStart = recalc.scheduledStart;
+      row.scheduledEnd = recalc.scheduledEnd;
+      row.scheduledHours = recalc.scheduledHours;
+      row.payrollCheckIn = recalc.payrollCheckIn;
+      row.payrollCheckOut = recalc.payrollCheckOut;
+    }
     row.overtimeApprovalStatus = "approved";
     row.overtimeApprovedAt = new Date().toISOString();
   } else {
@@ -1927,14 +2104,18 @@ async function resolveOvertimeReview(req, approve) {
     if (isValidTimeText(scheduledEnd) && isValidTimeText(row.checkIn || "")) {
       const recalc = recalcByTimes(row.date, row.checkIn, scheduledEnd, Number(row.breakMin || 0), row.employee);
       row.checkOut = scheduledEnd;
+      row.actualHours = recalc.actualHours;
       row.hours = recalc.hours;
       row.overtime = recalc.overtime;
+      row.requestedOvertimeHours = recalc.requestedOvertimeHours;
       row.isLate = recalc.isLate;
       row.payrollEligible = recalc.payrollEligible;
-      row.payrollRule = recalc.payrollEligible ? "normal_window" : "outside_window";
+      row.payrollRule = recalc.payrollRule;
       row.scheduledStart = recalc.scheduledStart;
       row.scheduledEnd = recalc.scheduledEnd;
       row.scheduledHours = recalc.scheduledHours;
+      row.payrollCheckIn = recalc.payrollCheckIn;
+      row.payrollCheckOut = recalc.payrollCheckOut;
     }
     row.overtimeApprovalStatus = "rejected";
     row.overtimeRejectedAt = new Date().toISOString();
@@ -1970,6 +2151,13 @@ function recordLocalAction(employee, site, action) {
 
   const current = state.openSessions[employee] || null;
   if (action === "checkin") {
+    const rule = getEmployeeRule(employee);
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const window = evaluateCheckInWindow(nowMinutes, rule);
+    if (rule.mode === "block" && !window.within) {
+      alert(window.reason === "early_outside" ? "出勤可能時刻より早すぎます。" : "出勤可能時刻を過ぎています。");
+      return;
+    }
     state.openSessions[employee] = { checkInISO: now.toISOString(), breakStartISO: null, totalBreakMin: 0, site };
   } else if (action === "breakStart" && current?.checkInISO) {
     current.breakStartISO = now.toISOString();
@@ -1987,18 +2175,11 @@ function recordLocalAction(employee, site, action) {
       breakMin += Math.max(0, Math.round((now.getTime() - new Date(current.breakStartISO).getTime()) / 60000));
     }
     const checkInAt = new Date(current.checkInISO);
-    const rawHours = (now.getTime() - checkInAt.getTime()) / 3600000;
-    const hours = Math.max(0.5, Number((rawHours - breakMin / 60).toFixed(1)));
-    const rule = getEmployeeRule(employee);
-    const scheduledMinutes = computeScheduledMinutes(rule.workStart, rule.workEnd);
-    const scheduledHours = Number((scheduledMinutes / 60).toFixed(1));
-    const overtime = Math.max(0, Number((hours - scheduledHours).toFixed(1)));
-    const checkInMin = checkInAt.getHours() * 60 + checkInAt.getMinutes();
-    const checkOutMin = now.getHours() * 60 + now.getMinutes();
-    const scheduledStartMin = minutesFromHHMM(rule.workStart);
-    const scheduledEndMin = minutesFromHHMM(rule.workEnd);
-    const isLate = scheduledStartMin !== null ? checkInMin > scheduledStartMin : checkInMin > 9 * 60;
-    const exceededScheduledEnd = scheduledEndMin !== null ? checkOutMin > scheduledEndMin : false;
+    const recalc = recalcByTimes(date, hhmmFromDate(checkInAt), time, breakMin, employee);
+    if (recalc.blocked) {
+      alert(recalc.blockedReason || "打刻ルール外のため反映できません");
+      return;
+    }
 
     const row = {
       date,
@@ -2006,17 +2187,21 @@ function recordLocalAction(employee, site, action) {
       site: current.site || site,
       checkIn: hhmmFromDate(checkInAt),
       checkOut: time,
-      hours,
+      actualHours: recalc.actualHours,
+      hours: recalc.hours,
       breakMin,
-      overtime,
-      isLate,
-      payrollEligible: isPayrollEligibleByWindow(checkInMin, scheduledStartMin),
-      payrollRule: isPayrollEligibleByWindow(checkInMin, scheduledStartMin) ? "normal_window" : "outside_window",
-      scheduledStart: rule.workStart,
-      scheduledEnd: rule.workEnd,
-      scheduledHours,
-      overtimeApprovalStatus: exceededScheduledEnd ? "pending" : "none",
-      overtimeRequestedAt: exceededScheduledEnd ? now.toISOString() : null,
+      overtime: recalc.overtime,
+      requestedOvertimeHours: recalc.requestedOvertimeHours,
+      isLate: recalc.isLate,
+      payrollEligible: recalc.payrollEligible,
+      payrollRule: recalc.payrollRule,
+      scheduledStart: recalc.scheduledStart,
+      scheduledEnd: recalc.scheduledEnd,
+      scheduledHours: recalc.scheduledHours,
+      payrollCheckIn: recalc.payrollCheckIn,
+      payrollCheckOut: recalc.payrollCheckOut,
+      overtimeApprovalStatus: recalc.overtimeNeedsApproval ? "pending" : "none",
+      overtimeRequestedAt: recalc.overtimeNeedsApproval ? now.toISOString() : null,
     };
     row.sourceKey = sourceKey(row);
     state.timecards.push(row);
@@ -2144,6 +2329,7 @@ async function syncShiftPlansToServer() {
 async function syncEmployeesToServer() {
   if (!API_ENABLED) return;
   try {
+    const policy = normalizeAttendancePolicy(state.attendancePolicy);
     await apiRequest("/api/employees/sync", {
       method: "POST",
       body: JSON.stringify({
@@ -2154,7 +2340,10 @@ async function syncEmployeesToServer() {
           active: !!e.active,
           workStart: normalizeText(e.workStart || "09:00"),
           workEnd: normalizeText(e.workEnd || "17:00"),
+          bufferBeforeMin: normalizeOptionalMinute(e.bufferBeforeMin),
+          bufferAfterMin: normalizeOptionalMinute(e.bufferAfterMin),
         })),
+        attendancePolicy: policy,
       }),
     });
   } catch (_e) {}
@@ -2292,8 +2481,8 @@ async function lineAction(action) {
         : null,
   };
 
-  try {
-    if (API_ENABLED) {
+  if (API_ENABLED) {
+    try {
       const data = await apiRequest("/api/line-action", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -2305,14 +2494,19 @@ async function lineAction(action) {
         document.getElementById("syncStatus").textContent = "PCへ反映済み";
         return;
       }
+      throw new Error("打刻反映に失敗しました。");
+    } catch (err) {
+      document.getElementById("syncStatus").textContent = "反映失敗";
+      alert(err?.message || "打刻反映に失敗しました。");
+      return;
     }
-  } catch (_e) {}
+  }
 
   // API未利用時のデモ用フォールバック
   recordLocalAction(employee, site, action);
   attachGpsToLatest(employee, actionLabel(action));
   renderAll();
-  document.getElementById("syncStatus").textContent = API_ENABLED ? "反映失敗（ローカル記録のみ）" : "ローカル記録済み";
+  document.getElementById("syncStatus").textContent = "ローカル記録済み";
 }
 
 function captureGps() {
@@ -2340,12 +2534,29 @@ function captureGps() {
 }
 
 function bindMasterEvents() {
+  document.getElementById("attendancePolicyForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const mode = normalizePolicyMode(document.getElementById("policyMode")?.value || "payroll_exclude");
+    const globalBeforeMin = clampMinute(document.getElementById("policyGlobalBefore")?.value, 10);
+    const globalAfterMin = clampMinute(document.getElementById("policyGlobalAfter")?.value, 10);
+    state.attendancePolicy = normalizeAttendancePolicy({
+      mode,
+      globalBeforeMin,
+      globalAfterMin,
+    });
+    renderAll();
+    syncEmployeesToServer();
+    alert("打刻ルールを保存しました。");
+  });
+
   document.getElementById("employeeForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const code = normalizeText(document.getElementById("employeeCode").value);
     const name = normalizeText(document.getElementById("employeeName").value);
     const workStart = normalizeText(document.getElementById("employeeWorkStart")?.value || "09:00");
     const workEnd = normalizeText(document.getElementById("employeeWorkEnd")?.value || "17:00");
+    const bufferBeforeMin = normalizeOptionalMinute(document.getElementById("employeeBufferBefore")?.value || "");
+    const bufferAfterMin = normalizeOptionalMinute(document.getElementById("employeeBufferAfter")?.value || "");
     if (!code || !name || !isValidTimeText(workStart) || !isValidTimeText(workEnd)) {
       alert("社員コード・社員名・標準出勤/退勤時刻を入力してください。");
       return;
@@ -2358,13 +2569,17 @@ function bindMasterEvents() {
       alert("同じ社員名があります");
       return;
     }
-    state.employees.push({ id: uid("e"), code, name, active: true, workStart, workEnd });
+    state.employees.push({ id: uid("e"), code, name, active: true, workStart, workEnd, bufferBeforeMin, bufferAfterMin });
     document.getElementById("employeeCode").value = "";
     document.getElementById("employeeName").value = "";
     const ws = document.getElementById("employeeWorkStart");
     const we = document.getElementById("employeeWorkEnd");
+    const bb = document.getElementById("employeeBufferBefore");
+    const ba = document.getElementById("employeeBufferAfter");
     if (ws) ws.value = "09:00";
     if (we) we.value = "17:00";
+    if (bb) bb.value = "";
+    if (ba) ba.value = "";
     renderAll();
     syncEmployeesToServer();
   });
@@ -2483,6 +2698,14 @@ function bindMasterEvents() {
       const nextName = normalizeText(window.prompt("社員名を変更", row.name));
       const nextStart = normalizeText(window.prompt("標準出勤時刻を変更 (HH:MM)", row.workStart || "09:00"));
       const nextEnd = normalizeText(window.prompt("標準退勤時刻を変更 (HH:MM)", row.workEnd || "17:00"));
+      const beforePrompt = window.prompt(
+        "出勤バッファ（分）を変更（空欄で共通設定）",
+        row.bufferBeforeMin === null || row.bufferBeforeMin === undefined ? "" : String(row.bufferBeforeMin)
+      );
+      const afterPrompt = window.prompt(
+        "退勤バッファ（分）を変更（空欄で共通設定）",
+        row.bufferAfterMin === null || row.bufferAfterMin === undefined ? "" : String(row.bufferAfterMin)
+      );
       if (!nextCode || !nextName || !isValidTimeText(nextStart) || !isValidTimeText(nextEnd)) return;
       if (state.employees.some((x) => x.id !== row.id && normalizeText(x.code) === nextCode)) {
         alert("同じ社員コードがあります");
@@ -2497,6 +2720,8 @@ function bindMasterEvents() {
       row.name = nextName;
       row.workStart = nextStart;
       row.workEnd = nextEnd;
+      row.bufferBeforeMin = normalizeOptionalMinute(beforePrompt);
+      row.bufferAfterMin = normalizeOptionalMinute(afterPrompt);
       renameEmployeeReferences(beforeName, row.name);
       renderAll();
       renameLineMappings(beforeName, row.name, row.id);

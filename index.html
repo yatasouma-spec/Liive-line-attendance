@@ -334,11 +334,23 @@
           <section class="grid-2">
             <article class="panel">
               <h2>社員マスタ管理</h2>
+              <form id="attendancePolicyForm" class="master-form policy-form">
+                <select id="policyMode" aria-label="運用モード">
+                  <option value="warning_only">警告のみ（実績優先）</option>
+                  <option value="payroll_exclude">給与除外（推奨）</option>
+                  <option value="block">打刻ブロック（厳格）</option>
+                </select>
+                <input id="policyGlobalBefore" type="number" min="0" max="180" step="1" placeholder="共通バッファ前（分）" />
+                <input id="policyGlobalAfter" type="number" min="0" max="180" step="1" placeholder="共通バッファ後（分）" />
+                <button type="submit" class="btn btn-ghost">打刻ルール保存</button>
+              </form>
               <form id="employeeForm" class="master-form">
                 <input id="employeeCode" type="text" placeholder="社員コード 例:E001" required />
                 <input id="employeeName" type="text" placeholder="社員名" required />
                 <input id="employeeWorkStart" type="time" value="09:00" required />
                 <input id="employeeWorkEnd" type="time" value="17:00" required />
+                <input id="employeeBufferBefore" type="number" min="0" max="180" step="1" placeholder="個別バッファ前（空欄=共通）" />
+                <input id="employeeBufferAfter" type="number" min="0" max="180" step="1" placeholder="個別バッファ後（空欄=共通）" />
                 <button type="submit" class="btn">社員を追加</button>
               </form>
               <div class="table-wrap">
@@ -348,6 +360,7 @@
                       <th>コード</th>
                       <th>社員名</th>
                       <th>標準勤務</th>
+                      <th>打刻バッファ</th>
                       <th>状態</th>
                       <th>操作</th>
                     </tr>
