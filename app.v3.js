@@ -13,6 +13,9 @@ const OPEN_SESSION_KEY = "liiveAttendanceOpenSessionsV1";
 const THEME_KEY = "liiveAttendanceThemeV1";
 const ATTENDANCE_POLICY_KEY = "liiveAttendancePolicyV1";
 const ALCOHOL_LIMIT_KEY = "liiveAttendanceAlcoholLimitV1";
+const START_SITES_KEY = "liiveAttendanceStartSitesV1";
+const END_SITES_KEY = "liiveAttendanceEndSitesV1";
+const EMPLOYEE_SITE_LINK_KEY = "liiveAttendanceEmployeeSiteLinksV1";
 
 const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
@@ -69,6 +72,9 @@ const state = {
   theme: loadJson(THEME_KEY, "blue"),
   attendancePolicy: loadJson(ATTENDANCE_POLICY_KEY, defaultAttendancePolicy),
   alcoholLimit: loadJson(ALCOHOL_LIMIT_KEY, defaultAlcoholLimit),
+  startSites: loadJson(START_SITES_KEY, []),
+  endSites: loadJson(END_SITES_KEY, []),
+  employeeSiteLinks: loadJson(EMPLOYEE_SITE_LINK_KEY, []),
 };
 
 const viewTitle = {
@@ -91,10 +97,78 @@ function normalizeEmployeeRows() {
     active: e.active !== false,
     workStart: normalizeText(e.workStart || "09:00"),
     workEnd: normalizeText(e.workEnd || "17:00"),
-    bufferBeforeMin: normalizeOptionalMinute(e.bufferBeforeMin),
-    bufferAfterMin: normalizeOptionalMinute(e.bufferAfterMin),
   }));
   state.attendancePolicy = normalizeAttendancePolicy(state.attendancePolicy);
+}
+
+function normalizeSiteRows(rows, prefix) {
+  return (rows || []).map((row, i) => {
+    const lat = Number(row?.geoLat);
+    const lng = Number(row?.geoLng);
+    const radius = Number(row?.geoRadiusM);
+    return {
+      id: normalizeText(row?.id || "") || uid(`${prefix}${i + 1}`),
+      name: normalizeText(row?.name || `${prefix}-${i + 1}`),
+      active: row?.active !== false,
+      geoLat: Number.isFinite(lat) ? lat : null,
+      geoLng: Number.isFinite(lng) ? lng : null,
+      geoRadiusM: Number.isFinite(radius) && radius > 0 ? radius : 300,
+      geoPlaceName: normalizeText(row?.geoPlaceName || ""),
+      geoMapUrl: normalizeText(row?.geoMapUrl || ""),
+    };
+  });
+}
+
+function normalizeEmployeeSiteLinks(rows) {
+  const map = new Map();
+  (rows || []).forEach((row) => {
+    const employeeId = normalizeText(row?.employeeId || "");
+    if (!employeeId) return;
+    const normalized = {
+      id: normalizeText(row?.id || "") || uid("esl"),
+      employeeId,
+      site: normalizeText(row?.site || ""),
+      startSiteId: normalizeText(row?.startSiteId || ""),
+      endSiteId: normalizeText(row?.endSiteId || ""),
+      active: row?.active !== false,
+    };
+    map.set(employeeId, normalized);
+  });
+  return Array.from(map.values());
+}
+
+function migrateSiteMastersIfNeeded() {
+  if (!state.startSites.length && Array.isArray(state.routes) && state.routes.length) {
+    state.startSites = state.routes.map((route, index) => ({
+      id: uid(`ss${index + 1}`),
+      name: normalizeText(route?.name || `出勤地点-${index + 1}`),
+      active: route?.active !== false,
+      geoLat: Number.isFinite(Number(route?.geoLat)) ? Number(route.geoLat) : null,
+      geoLng: Number.isFinite(Number(route?.geoLng)) ? Number(route.geoLng) : null,
+      geoRadiusM: Number.isFinite(Number(route?.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300,
+      geoPlaceName: normalizeText(route?.geoPlaceName || ""),
+      geoMapUrl: normalizeText(route?.geoMapUrl || ""),
+    }));
+  }
+  if (!state.endSites.length && Array.isArray(state.routes) && state.routes.length) {
+    state.endSites = state.routes.map((route, index) => ({
+      id: uid(`es${index + 1}`),
+      name: normalizeText(route?.name || `退勤地点-${index + 1}`),
+      active: route?.active !== false,
+      geoLat: Number.isFinite(Number(route?.geoLat)) ? Number(route.geoLat) : null,
+      geoLng: Number.isFinite(Number(route?.geoLng)) ? Number(route.geoLng) : null,
+      geoRadiusM: Number.isFinite(Number(route?.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300,
+      geoPlaceName: normalizeText(route?.geoPlaceName || ""),
+      geoMapUrl: normalizeText(route?.geoMapUrl || ""),
+    }));
+  }
+}
+
+function normalizeSiteMasterRows() {
+  migrateSiteMastersIfNeeded();
+  state.startSites = normalizeSiteRows(state.startSites, "ss");
+  state.endSites = normalizeSiteRows(state.endSites, "es");
+  state.employeeSiteLinks = normalizeEmployeeSiteLinks(state.employeeSiteLinks);
 }
 
 function persist() {
@@ -113,6 +187,9 @@ function persist() {
   localStorage.setItem(THEME_KEY, JSON.stringify(state.theme));
   localStorage.setItem(ATTENDANCE_POLICY_KEY, JSON.stringify(normalizeAttendancePolicy(state.attendancePolicy)));
   localStorage.setItem(ALCOHOL_LIMIT_KEY, JSON.stringify(normalizeAlcoholLimit(state.alcoholLimit)));
+  localStorage.setItem(START_SITES_KEY, JSON.stringify(state.startSites));
+  localStorage.setItem(END_SITES_KEY, JSON.stringify(state.endSites));
+  localStorage.setItem(EMPLOYEE_SITE_LINK_KEY, JSON.stringify(state.employeeSiteLinks));
 }
 
 function normalizePolicyMode(value) {
@@ -186,6 +263,14 @@ function activeRoutes() {
   return state.routes.filter((r) => r.active);
 }
 
+function activeStartSites() {
+  return state.startSites.filter((row) => row.active);
+}
+
+function activeEndSites() {
+  return state.endSites.filter((row) => row.active);
+}
+
 function getEmployeeCode(name) {
   const row = state.employees.find((e) => e.name === name);
   return row ? row.code : "";
@@ -197,8 +282,8 @@ function getEmployeeRule(name) {
   return {
     workStart: normalizeText(row?.workStart || "09:00"),
     workEnd: normalizeText(row?.workEnd || "17:00"),
-    bufferBeforeMin: Number.isFinite(Number(row?.bufferBeforeMin)) ? Number(row.bufferBeforeMin) : policy.globalBeforeMin,
-    bufferAfterMin: Number.isFinite(Number(row?.bufferAfterMin)) ? Number(row.bufferAfterMin) : policy.globalAfterMin,
+    bufferBeforeMin: policy.globalBeforeMin,
+    bufferAfterMin: policy.globalAfterMin,
     mode: policy.mode,
   };
 }
@@ -352,30 +437,6 @@ async function fillGeoFromMapUrl(prefix) {
   return true;
 }
 
-function syncEndLocationFromStart() {
-  const startMapUrl = document.getElementById("lineMapStartGeoMapUrl")?.value || "";
-  const startPlace = document.getElementById("lineMapStartGeoPlaceName")?.value || "";
-  const startLat = document.getElementById("lineMapStartGeoLat")?.value || "";
-  const startLng = document.getElementById("lineMapStartGeoLng")?.value || "";
-  const startRadius = document.getElementById("lineMapStartGeoRadius")?.value || "300";
-  const endMapUrl = document.getElementById("lineMapEndGeoMapUrl");
-  const endPlace = document.getElementById("lineMapEndGeoPlaceName");
-  const endLat = document.getElementById("lineMapEndGeoLat");
-  const endLng = document.getElementById("lineMapEndGeoLng");
-  const endRadius = document.getElementById("lineMapEndGeoRadius");
-  if (endMapUrl) endMapUrl.value = startMapUrl;
-  if (endPlace) endPlace.value = startPlace;
-  if (endLat) endLat.value = startLat;
-  if (endLng) endLng.value = startLng;
-  if (endRadius) endRadius.value = startRadius;
-  syncLineMapPlacePreview("lineMapEnd");
-}
-
-function applyEndLocationMode() {
-  syncEndLocationFromStart();
-  updateLineMapProgress();
-}
-
 function fillGeoFromCurrentGps(prefix) {
   if (!state.currentGps) {
     alert("先に「現在地を取得（GPS）」を実行してください。");
@@ -395,63 +456,75 @@ function markLineMapSaveStatus(klass, text) {
   setStatusBadge("lineMapSaveStatus", klass, text);
 }
 
+function getSiteById(rows, siteId) {
+  const wanted = normalizeText(siteId || "");
+  if (!wanted) return null;
+  return (rows || []).find((row) => normalizeText(row?.id || "") === wanted) || null;
+}
+
+function getEmployeeById(employeeId) {
+  const wanted = normalizeText(employeeId || "");
+  if (!wanted) return null;
+  return state.employees.find((row) => normalizeText(row?.id || "") === wanted) || null;
+}
+
+function getEmployeeSiteLink(employeeId) {
+  const wanted = normalizeText(employeeId || "");
+  if (!wanted) return null;
+  return state.employeeSiteLinks.find((row) => normalizeText(row.employeeId || "") === wanted && row.active !== false) || null;
+}
+
+function ensureRouteExists(siteName) {
+  const name = normalizeText(siteName || "");
+  if (!name) return;
+  const exists = state.routes.some((row) => normalizeText(row.name) === name);
+  if (!exists) {
+    state.routes.push({
+      id: uid("r"),
+      name,
+      active: true,
+    });
+  }
+}
+
 function updateLineMapProgress() {
-  const siteName = normalizeText(document.getElementById("lineMapSite")?.value || "");
-  const selectedSiteLabel = document.getElementById("lineMapSelectedSiteName");
-  if (selectedSiteLabel) selectedSiteLabel.textContent = siteName || "未選択";
-  if (!siteName) {
-    setStatusBadge("lineMapStartStatus", "neutral", "未設定");
-    setStatusBadge("lineMapEndStatus", "neutral", "未設定");
-    syncLineMapPlacePreview("lineMapStart");
-    syncLineMapPlacePreview("lineMapEnd");
+  const employeeId = normalizeText(document.getElementById("lineMapEmployee")?.value || "");
+  const siteEl = document.getElementById("lineMapAutoSitePreview");
+  const startEl = document.getElementById("lineMapAutoStartPreview");
+  const endEl = document.getElementById("lineMapAutoEndPreview");
+
+  if (!employeeId) {
+    if (siteEl) siteEl.textContent = "未設定";
+    if (startEl) startEl.textContent = "未設定";
+    if (endEl) endEl.textContent = "未設定";
+    setStatusBadge("lineMapLinkStatus", "neutral", "社員と地点の紐付け待ち");
     return;
   }
 
-  const route = state.routes.find((r) => normalizeText(r.name) === siteName);
-  const routeLat = Number(route?.geoLat);
-  const routeLng = Number(route?.geoLng);
-  const routeRadius = Number.isFinite(Number(route?.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300;
-  const routePlace = normalizeText(route?.geoPlaceName || route?.name || siteName);
-  const routeMapUrl = normalizeText(route?.geoMapUrl || "");
-
-  if (route && Number.isFinite(routeLat) && Number.isFinite(routeLng)) {
-    setGeoInputs("lineMapStart", routeLat, routeLng, routePlace, routeMapUrl);
-    const startRadiusEl = document.getElementById("lineMapStartGeoRadius");
-    if (startRadiusEl) startRadiusEl.value = String(routeRadius);
-    syncEndLocationFromStart();
-    setStatusBadge("lineMapStartStatus", "ok", "設定済み（勤務先マスタ）");
-    setStatusBadge("lineMapEndStatus", "ok", "設定済み（勤務先マスタ）");
-  } else {
-    const startLatEl = document.getElementById("lineMapStartGeoLat");
-    const startLngEl = document.getElementById("lineMapStartGeoLng");
-    const startPlaceEl = document.getElementById("lineMapStartGeoPlaceName");
-    const endLatEl = document.getElementById("lineMapEndGeoLat");
-    const endLngEl = document.getElementById("lineMapEndGeoLng");
-    const endPlaceEl = document.getElementById("lineMapEndGeoPlaceName");
-    if (startLatEl) startLatEl.value = "";
-    if (startLngEl) startLngEl.value = "";
-    if (startPlaceEl) startPlaceEl.value = "";
-    if (endLatEl) endLatEl.value = "";
-    if (endLngEl) endLngEl.value = "";
-    if (endPlaceEl) endPlaceEl.value = "";
-    setStatusBadge("lineMapStartStatus", "warn", "勤務先マスタで位置設定してください");
-    setStatusBadge("lineMapEndStatus", "warn", "勤務先マスタで位置設定してください");
+  const link = getEmployeeSiteLink(employeeId);
+  if (!link) {
+    if (siteEl) siteEl.textContent = "未設定";
+    if (startEl) startEl.textContent = "未設定";
+    if (endEl) endEl.textContent = "未設定";
+    setStatusBadge("lineMapLinkStatus", "warn", "社員/現場設定タブで地点紐付けしてください");
+    return;
   }
-  syncLineMapPlacePreview("lineMapStart");
-  syncLineMapPlacePreview("lineMapEnd");
-}
 
-function syncLineMapPlacePreview(prefix) {
-  const placeInput = document.getElementById(`${prefix}GeoPlaceName`);
-  const placePreview = document.getElementById(`${prefix}GeoPlacePreview`);
-  if (!placePreview) return;
-  const text = normalizeText(placeInput?.value || "");
-  placePreview.textContent = text || "未設定";
-}
+  const startSite = getSiteById(state.startSites, link.startSiteId);
+  const endSite = getSiteById(state.endSites, link.endSiteId);
+  const siteLabel = displaySiteLabel(link.site || startSite?.name || "未設定");
 
-function applyLineSiteTemplate() {
-  updateLineMapProgress();
-  markLineMapSaveStatus("warn", "編集中（保存してください）");
+  if (siteEl) siteEl.textContent = siteLabel;
+  if (startEl) startEl.textContent = formatRouteGeo(startSite);
+  if (endEl) endEl.textContent = formatRouteGeo(endSite);
+
+  const hasStart = hasGeo(startSite?.geoLat, startSite?.geoLng);
+  const hasEnd = hasGeo(endSite?.geoLat, endSite?.geoLng);
+  if (!hasStart || !hasEnd) {
+    setStatusBadge("lineMapLinkStatus", "warn", "地点の位置情報が不足しています");
+    return;
+  }
+  setStatusBadge("lineMapLinkStatus", "ok", "担当現場・出勤地点・退勤地点の紐付け済み");
 }
 
 function reconcileLineDisplayNames() {
@@ -502,6 +575,9 @@ function renameRouteReferences(oldRoute, newRoute) {
   });
   Object.values(state.openSessions || {}).forEach((row) => {
     if (row && row.site === oldRoute) row.site = newRoute;
+  });
+  state.employeeSiteLinks.forEach((row) => {
+    if (normalizeText(row.site) === normalizeText(oldRoute)) row.site = newRoute;
   });
 }
 
@@ -898,8 +974,16 @@ function computeAlerts() {
 
 function populateSelectors() {
   const employeeOptions = activeEmployees().map((e) => `<option value="${e.name}">${e.name}</option>`).join("");
-  const employeeIdOptions = activeEmployees().map((e) => `<option value="${e.id}">${e.name}</option>`).join("");
+  const employeeIdOptions = `<option value="">社員を選択</option>${activeEmployees()
+    .map((e) => `<option value="${e.id}">${e.name}</option>`)
+    .join("")}`;
   const routeOptions = activeRoutes().map((r) => `<option value="${r.name}">${r.name}</option>`).join("");
+  const startSiteOptions = `<option value="">出勤地点を選択</option>${activeStartSites()
+    .map((row) => `<option value="${row.id}">${row.name}</option>`)
+    .join("")}`;
+  const endSiteOptions = `<option value="">退勤地点を選択</option>${activeEndSites()
+    .map((row) => `<option value="${row.id}">${row.name}</option>`)
+    .join("")}`;
 
   ["lineEmployee", "shiftEmployee", "shiftEmployeePlan", "leaveEmployee"].forEach((id) => {
     const el = document.getElementById(id);
@@ -916,6 +1000,32 @@ function populateSelectors() {
     if (prev && [...lineMapEmployee.options].some((o) => o.value === prev)) lineMapEmployee.value = prev;
   }
 
+  const linkEmployee = document.getElementById("linkEmployeeId");
+  if (linkEmployee) {
+    const prev = linkEmployee.value;
+    linkEmployee.innerHTML = employeeIdOptions;
+    if (prev && [...linkEmployee.options].some((o) => o.value === prev)) linkEmployee.value = prev;
+  }
+
+  const linkStartSite = document.getElementById("linkStartSiteId");
+  if (linkStartSite) {
+    const prev = linkStartSite.value;
+    linkStartSite.innerHTML = startSiteOptions;
+    if (prev && [...linkStartSite.options].some((o) => o.value === prev)) linkStartSite.value = prev;
+  }
+
+  const linkEndSite = document.getElementById("linkEndSiteId");
+  if (linkEndSite) {
+    const prev = linkEndSite.value;
+    linkEndSite.innerHTML = endSiteOptions;
+    if (prev && [...linkEndSite.options].some((o) => o.value === prev)) linkEndSite.value = prev;
+  }
+
+  const routeNameList = document.getElementById("routeNameList");
+  if (routeNameList) {
+    routeNameList.innerHTML = activeRoutes().map((r) => `<option value="${r.name}"></option>`).join("");
+  }
+
   ["lineSite", "shiftRoute"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -924,17 +1034,6 @@ function populateSelectors() {
     if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
   });
 
-  const lineMapSite = document.getElementById("lineMapSite");
-  if (lineMapSite) {
-    const prev = lineMapSite.value;
-    lineMapSite.innerHTML = `<option value="">現場を選択</option>${routeOptions}`;
-    if (prev && [...lineMapSite.options].some((o) => o.value === prev)) {
-      lineMapSite.value = prev;
-    } else if (!prev) {
-      const firstRoute = activeRoutes()[0];
-      if (firstRoute?.name) lineMapSite.value = firstRoute.name;
-    }
-  }
 }
 
 function renderDashboard() {
@@ -1366,7 +1465,9 @@ function renderSummary() {
 
 function renderMasters() {
   const empBody = document.getElementById("employeeMasterBody");
-  const routeBody = document.getElementById("routeMasterBody");
+  const startSiteBody = document.getElementById("startSiteMasterBody");
+  const endSiteBody = document.getElementById("endSiteMasterBody");
+  const employeeSiteLinkBody = document.getElementById("employeeSiteLinkBody");
   const shiftBody = document.getElementById("shiftPlanBody");
   const lineUsersBody = document.getElementById("lineUsersBody");
   const policy = normalizeAttendancePolicy(state.attendancePolicy);
@@ -1387,7 +1488,6 @@ function renderMasters() {
       <td>${e.code}</td>
       <td>${e.name}</td>
       <td>${normalizeText(e.workStart || "09:00")} - ${normalizeText(e.workEnd || "17:00")}</td>
-      <td>${employeeBufferLabel(e)}</td>
       <td><span class="badge ${e.active ? "ok" : "warn"}">${e.active ? "有効" : "無効"}</span></td>
       <td>
         <button class="btn btn-ghost" data-edit-emp="${e.id}">編集</button>
@@ -1399,21 +1499,68 @@ function renderMasters() {
       .join("");
   }
 
-  if (routeBody) {
-    routeBody.innerHTML = state.routes
+  if (startSiteBody) {
+    startSiteBody.innerHTML = state.startSites
       .map(
         (r) => `<tr>
       <td>${r.name}</td>
       <td>${formatRouteGeo(r)}</td>
       <td><span class="badge ${r.active ? "ok" : "warn"}">${r.active ? "有効" : "無効"}</span></td>
       <td>
-        <button class="btn btn-ghost" data-edit-route="${r.id}">編集</button>
-        <button class="btn btn-ghost" data-toggle-route="${r.id}">${r.active ? "無効化" : "有効化"}</button>
-        <button class="btn btn-ghost" data-delete-route="${r.id}">削除</button>
+        <button class="btn btn-ghost" data-edit-start-site="${r.id}">編集</button>
+        <button class="btn btn-ghost" data-toggle-start-site="${r.id}">${r.active ? "無効化" : "有効化"}</button>
+        <button class="btn btn-ghost" data-delete-start-site="${r.id}">削除</button>
       </td>
     </tr>`
       )
       .join("");
+  }
+
+  if (endSiteBody) {
+    endSiteBody.innerHTML = state.endSites
+      .map(
+        (r) => `<tr>
+      <td>${r.name}</td>
+      <td>${formatRouteGeo(r)}</td>
+      <td><span class="badge ${r.active ? "ok" : "warn"}">${r.active ? "有効" : "無効"}</span></td>
+      <td>
+        <button class="btn btn-ghost" data-edit-end-site="${r.id}">編集</button>
+        <button class="btn btn-ghost" data-toggle-end-site="${r.id}">${r.active ? "無効化" : "有効化"}</button>
+        <button class="btn btn-ghost" data-delete-end-site="${r.id}">削除</button>
+      </td>
+    </tr>`
+      )
+      .join("");
+  }
+
+  if (employeeSiteLinkBody) {
+    employeeSiteLinkBody.innerHTML = state.employeeSiteLinks.length
+      ? state.employeeSiteLinks
+          .map((row) => {
+            const employee = getEmployeeById(row.employeeId);
+            const startSite = getSiteById(state.startSites, row.startSiteId);
+            const endSite = getSiteById(state.endSites, row.endSiteId);
+            const employeeLabel = employee?.name || `未登録社員 (${row.employeeId})`;
+            const siteLabel = displaySiteLabel(row.site);
+            const hasStart = !!startSite && hasGeo(startSite.geoLat, startSite.geoLng);
+            const hasEnd = !!endSite && hasGeo(endSite.geoLat, endSite.geoLng);
+            const statusClass = row.active === false ? "warn" : hasStart && hasEnd ? "ok" : "warn";
+            const statusLabel = row.active === false ? "無効" : hasStart && hasEnd ? "設定済み" : "位置未設定";
+            return `<tr>
+              <td>${employeeLabel}</td>
+              <td>${siteLabel}</td>
+              <td>${startSite?.name || "未設定"}</td>
+              <td>${endSite?.name || "未設定"}</td>
+              <td><span class="badge ${statusClass}">${statusLabel}</span></td>
+              <td>
+                <button class="btn btn-ghost" data-edit-employee-link="${row.id}">編集</button>
+                <button class="btn btn-ghost" data-toggle-employee-link="${row.id}">${row.active === false ? "有効化" : "無効化"}</button>
+                <button class="btn btn-ghost" data-delete-employee-link="${row.id}">削除</button>
+              </td>
+            </tr>`;
+          })
+          .join("")
+      : '<tr><td class="empty" colspan="6">まだ社員と地点の紐付けがありません</td></tr>';
   }
 
   if (shiftBody) {
@@ -1439,8 +1586,10 @@ function renderMasters() {
   if (lineUsersBody) {
     lineUsersBody.innerHTML = state.lineUsers.length
       ? state.lineUsers
-          .map(
-            (u) => `<tr>
+          .map((u) => {
+            const fallbackEmployee = state.employees.find((e) => normalizeText(e.name) === normalizeText(u.employee || ""));
+            const employeeId = normalizeText(u.employeeId || fallbackEmployee?.id || "");
+            return `<tr>
       <td>${u.userId}</td>
       <td>${u.employee || "-"}</td>
       <td>${displaySiteLabel(u.site)}</td>
@@ -1448,11 +1597,11 @@ function renderMasters() {
       <td>${formatEndGeoCell(u)}</td>
       <td>${lineMappingStatusBadge(u)}</td>
       <td>
-        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}">このIDを入力</button>
+        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${employeeId}">このIDを入力</button>
         <button class="btn btn-ghost" data-unmap-line-user="${u.userId}">紐付け解除</button>
       </td>
-    </tr>`
-          )
+    </tr>`;
+          })
           .join("")
       : '<tr><td class="empty" colspan="7">まだLINE送信履歴がありません</td></tr>';
   }
@@ -1469,10 +1618,6 @@ function renderAll() {
   renderCorrectionDesk();
   renderMasters();
   renderLeaveRequests();
-  applyEndLocationMode();
-  syncLineMapPlacePreview("route");
-  syncLineMapPlacePreview("lineMapStart");
-  syncLineMapPlacePreview("lineMapEnd");
   updateLineMapProgress();
   persist();
 }
@@ -2545,8 +2690,6 @@ function bindMasterEvents() {
     const name = normalizeText(document.getElementById("employeeName").value);
     const workStart = normalizeText(document.getElementById("employeeWorkStart")?.value || "09:00");
     const workEnd = normalizeText(document.getElementById("employeeWorkEnd")?.value || "17:00");
-    const bufferBeforeMin = normalizeOptionalMinute(document.getElementById("employeeBufferBefore")?.value || "");
-    const bufferAfterMin = normalizeOptionalMinute(document.getElementById("employeeBufferAfter")?.value || "");
     if (!code || !name || !isValidTimeText(workStart) || !isValidTimeText(workEnd)) {
       alert("社員コード・社員名・標準出勤/退勤時刻を入力してください。");
       return;
@@ -2559,54 +2702,88 @@ function bindMasterEvents() {
       alert("同じ社員名があります");
       return;
     }
-    state.employees.push({ id: uid("e"), code, name, active: true, workStart, workEnd, bufferBeforeMin, bufferAfterMin });
+    state.employees.push({ id: uid("e"), code, name, active: true, workStart, workEnd });
     document.getElementById("employeeCode").value = "";
     document.getElementById("employeeName").value = "";
     const ws = document.getElementById("employeeWorkStart");
     const we = document.getElementById("employeeWorkEnd");
-    const bb = document.getElementById("employeeBufferBefore");
-    const ba = document.getElementById("employeeBufferAfter");
     if (ws) ws.value = "09:00";
     if (we) we.value = "17:00";
-    if (bb) bb.value = "";
-    if (ba) ba.value = "";
     renderAll();
     syncEmployeesToServer();
   });
 
-  document.getElementById("routeForm")?.addEventListener("submit", (e) => {
+  document.getElementById("startSiteForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    const name = normalizeText(document.getElementById("routeName").value);
-    const mapUrl = normalizeText(document.getElementById("routeGeoMapUrl")?.value || "");
-    const placeName = normalizeText(document.getElementById("routeGeoPlaceName")?.value || "");
-    const geoLat = Number(document.getElementById("routeGeoLat")?.value || NaN);
-    const geoLng = Number(document.getElementById("routeGeoLng")?.value || NaN);
-    const geoRadiusM = Number(document.getElementById("routeGeoRadius")?.value || 300);
+    const name = normalizeText(document.getElementById("startSiteName")?.value || "");
+    const mapUrl = normalizeText(document.getElementById("startSiteGeoMapUrl")?.value || "");
+    const placeName = normalizeText(document.getElementById("startSiteGeoPlaceName")?.value || "");
+    const geoLat = Number(document.getElementById("startSiteGeoLat")?.value || NaN);
+    const geoLng = Number(document.getElementById("startSiteGeoLng")?.value || NaN);
+    const geoRadiusM = Number(document.getElementById("startSiteGeoRadius")?.value || 300);
     if (!name) return;
     if (!Number.isFinite(geoLat) || !Number.isFinite(geoLng)) {
-      alert("先に「URL/住所から位置設定」を押して拠点を確定してください。");
+      alert("先に「URL/住所から位置設定」を押して、出勤地点を確定してください。");
       return;
     }
-    if (state.routes.some((x) => normalizeText(x.name) === name)) {
-      alert("同じ現場名があります");
+    if (state.startSites.some((x) => normalizeText(x.name) === name)) {
+      alert("同じ出勤地点名があります");
       return;
     }
-    state.routes.push({
-      id: uid("r"),
+    state.startSites.push({
+      id: uid("ss"),
       name,
       active: true,
-      geoLat: Number.isFinite(geoLat) ? geoLat : null,
-      geoLng: Number.isFinite(geoLng) ? geoLng : null,
+      geoLat,
+      geoLng,
       geoRadiusM: Number.isFinite(geoRadiusM) && geoRadiusM > 0 ? geoRadiusM : 300,
       geoPlaceName: placeName || "",
       geoMapUrl: mapUrl || "",
     });
-    document.getElementById("routeName").value = "";
-    if (document.getElementById("routeGeoMapUrl")) document.getElementById("routeGeoMapUrl").value = "";
-    if (document.getElementById("routeGeoPlaceName")) document.getElementById("routeGeoPlaceName").value = "";
-    if (document.getElementById("routeGeoLat")) document.getElementById("routeGeoLat").value = "";
-    if (document.getElementById("routeGeoLng")) document.getElementById("routeGeoLng").value = "";
-    if (document.getElementById("routeGeoRadius")) document.getElementById("routeGeoRadius").value = "";
+    if (document.getElementById("startSiteName")) document.getElementById("startSiteName").value = "";
+    if (document.getElementById("startSiteGeoMapUrl")) document.getElementById("startSiteGeoMapUrl").value = "";
+    if (document.getElementById("startSiteGeoPlaceName")) document.getElementById("startSiteGeoPlaceName").value = "";
+    if (document.getElementById("startSiteGeoLat")) document.getElementById("startSiteGeoLat").value = "";
+    if (document.getElementById("startSiteGeoLng")) document.getElementById("startSiteGeoLng").value = "";
+    if (document.getElementById("startSiteGeoPlacePreview")) document.getElementById("startSiteGeoPlacePreview").textContent = "未設定";
+    if (document.getElementById("startSiteGeoRadius")) document.getElementById("startSiteGeoRadius").value = "300";
+    renderAll();
+  });
+
+  document.getElementById("endSiteForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = normalizeText(document.getElementById("endSiteName")?.value || "");
+    const mapUrl = normalizeText(document.getElementById("endSiteGeoMapUrl")?.value || "");
+    const placeName = normalizeText(document.getElementById("endSiteGeoPlaceName")?.value || "");
+    const geoLat = Number(document.getElementById("endSiteGeoLat")?.value || NaN);
+    const geoLng = Number(document.getElementById("endSiteGeoLng")?.value || NaN);
+    const geoRadiusM = Number(document.getElementById("endSiteGeoRadius")?.value || 300);
+    if (!name) return;
+    if (!Number.isFinite(geoLat) || !Number.isFinite(geoLng)) {
+      alert("先に「URL/住所から位置設定」を押して、退勤地点を確定してください。");
+      return;
+    }
+    if (state.endSites.some((x) => normalizeText(x.name) === name)) {
+      alert("同じ退勤地点名があります");
+      return;
+    }
+    state.endSites.push({
+      id: uid("es"),
+      name,
+      active: true,
+      geoLat,
+      geoLng,
+      geoRadiusM: Number.isFinite(geoRadiusM) && geoRadiusM > 0 ? geoRadiusM : 300,
+      geoPlaceName: placeName || "",
+      geoMapUrl: mapUrl || "",
+    });
+    if (document.getElementById("endSiteName")) document.getElementById("endSiteName").value = "";
+    if (document.getElementById("endSiteGeoMapUrl")) document.getElementById("endSiteGeoMapUrl").value = "";
+    if (document.getElementById("endSiteGeoPlaceName")) document.getElementById("endSiteGeoPlaceName").value = "";
+    if (document.getElementById("endSiteGeoLat")) document.getElementById("endSiteGeoLat").value = "";
+    if (document.getElementById("endSiteGeoLng")) document.getElementById("endSiteGeoLng").value = "";
+    if (document.getElementById("endSiteGeoPlacePreview")) document.getElementById("endSiteGeoPlacePreview").textContent = "未設定";
+    if (document.getElementById("endSiteGeoRadius")) document.getElementById("endSiteGeoRadius").value = "300";
     renderAll();
   });
 
@@ -2688,14 +2865,6 @@ function bindMasterEvents() {
       const nextName = normalizeText(window.prompt("社員名を変更", row.name));
       const nextStart = normalizeText(window.prompt("標準出勤時刻を変更 (HH:MM)", row.workStart || "09:00"));
       const nextEnd = normalizeText(window.prompt("標準退勤時刻を変更 (HH:MM)", row.workEnd || "17:00"));
-      const beforePrompt = window.prompt(
-        "出勤バッファ（分）を変更（空欄で共通設定）",
-        row.bufferBeforeMin === null || row.bufferBeforeMin === undefined ? "" : String(row.bufferBeforeMin)
-      );
-      const afterPrompt = window.prompt(
-        "退勤バッファ（分）を変更（空欄で共通設定）",
-        row.bufferAfterMin === null || row.bufferAfterMin === undefined ? "" : String(row.bufferAfterMin)
-      );
       if (!nextCode || !nextName || !isValidTimeText(nextStart) || !isValidTimeText(nextEnd)) return;
       if (state.employees.some((x) => x.id !== row.id && normalizeText(x.code) === nextCode)) {
         alert("同じ社員コードがあります");
@@ -2710,8 +2879,6 @@ function bindMasterEvents() {
       row.name = nextName;
       row.workStart = nextStart;
       row.workEnd = nextEnd;
-      row.bufferBeforeMin = normalizeOptionalMinute(beforePrompt);
-      row.bufferAfterMin = normalizeOptionalMinute(afterPrompt);
       renameEmployeeReferences(beforeName, row.name);
       renderAll();
       renameLineMappings(beforeName, row.name, row.id);
@@ -2728,6 +2895,7 @@ function bindMasterEvents() {
       );
       if (!ok) return;
       state.employees = state.employees.filter((x) => x.id !== row.id);
+      state.employeeSiteLinks = state.employeeSiteLinks.filter((link) => normalizeText(link.employeeId) !== normalizeText(row.id));
       state.shiftPlans = state.shiftPlans.filter((s) => s.employee !== row.name);
       delete state.openSessions[row.name];
       if (state.editingShiftId) {
@@ -2740,30 +2908,29 @@ function bindMasterEvents() {
     }
   });
 
-  document.getElementById("routeMasterBody")?.addEventListener("click", async (e) => {
+  document.getElementById("startSiteMasterBody")?.addEventListener("click", async (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
-    const toggleId = target.getAttribute("data-toggle-route");
+    const toggleId = target.getAttribute("data-toggle-start-site");
     if (toggleId) {
-      const row = state.routes.find((x) => x.id === toggleId);
+      const row = state.startSites.find((x) => x.id === toggleId);
       if (!row) return;
       row.active = !row.active;
       renderAll();
       return;
     }
-    const editId = target.getAttribute("data-edit-route");
+    const editId = target.getAttribute("data-edit-start-site");
     if (editId) {
-      const row = state.routes.find((x) => x.id === editId);
+      const row = state.startSites.find((x) => x.id === editId);
       if (!row) return;
-      const next = normalizeText(window.prompt("現場名を変更", row.name));
+      const next = normalizeText(window.prompt("出勤地点名を変更", row.name));
       if (!next) return;
-      if (state.routes.some((x) => x.id !== row.id && normalizeText(x.name) === next)) {
-        alert("同じ現場名があります");
+      if (state.startSites.some((x) => x.id !== row.id && normalizeText(x.name) === next)) {
+        alert("同じ出勤地点名があります");
         return;
       }
-      const before = row.name;
       row.name = next;
-      const nextMapUrl = normalizeText(window.prompt("拠点のGoogleマップURLまたは住所（変更しない場合は空欄）", "") || "");
+      const nextMapUrl = normalizeText(window.prompt("GoogleマップURLまたは住所（変更しない場合は空欄）", "") || "");
       const nextRadius = window.prompt("許容半径m", row.geoRadiusM ?? 300);
       const parsed = nextMapUrl ? await resolveGoogleMapsLatLng(nextMapUrl) : null;
       if (nextMapUrl && !parsed) {
@@ -2780,23 +2947,158 @@ function bindMasterEvents() {
         row.geoPlaceName = extractPlaceNameFromMapsUrl(nextMapUrl) || row.geoPlaceName || "";
       }
       row.geoRadiusM = Number.isFinite(radiusNum) && radiusNum > 0 ? radiusNum : 300;
-      renameRouteReferences(before, next);
       renderAll();
       return;
     }
-    const deleteId = target.getAttribute("data-delete-route");
+    const deleteId = target.getAttribute("data-delete-start-site");
     if (deleteId) {
-      const row = state.routes.find((x) => x.id === deleteId);
+      const row = state.startSites.find((x) => x.id === deleteId);
       if (!row) return;
-      const usingShift = state.shiftPlans.filter((s) => s.route === row.name).length;
+      const usingCount = state.employeeSiteLinks.filter((link) => normalizeText(link.startSiteId) === normalizeText(row.id)).length;
       const ok = window.confirm(
-        `現場「${row.name}」を削除します。\n関連シフト ${usingShift}件は同時削除されます。\nこの操作は取り消せません。`
+        `出勤地点「${row.name}」を削除します。\n関連紐付け ${usingCount}件からは解除されます。\nこの操作は取り消せません。`
       );
       if (!ok) return;
-      state.routes = state.routes.filter((x) => x.id !== row.id);
-      state.shiftPlans = state.shiftPlans.filter((s) => s.route !== row.name);
+      state.startSites = state.startSites.filter((x) => x.id !== row.id);
+      state.employeeSiteLinks = state.employeeSiteLinks.map((link) =>
+        normalizeText(link.startSiteId) === normalizeText(row.id) ? { ...link, startSiteId: "" } : link
+      );
       renderAll();
-      syncShiftPlansToServer();
+    }
+  });
+
+  document.getElementById("endSiteMasterBody")?.addEventListener("click", async (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const toggleId = target.getAttribute("data-toggle-end-site");
+    if (toggleId) {
+      const row = state.endSites.find((x) => x.id === toggleId);
+      if (!row) return;
+      row.active = !row.active;
+      renderAll();
+      return;
+    }
+    const editId = target.getAttribute("data-edit-end-site");
+    if (editId) {
+      const row = state.endSites.find((x) => x.id === editId);
+      if (!row) return;
+      const next = normalizeText(window.prompt("退勤地点名を変更", row.name));
+      if (!next) return;
+      if (state.endSites.some((x) => x.id !== row.id && normalizeText(x.name) === next)) {
+        alert("同じ退勤地点名があります");
+        return;
+      }
+      row.name = next;
+      const nextMapUrl = normalizeText(window.prompt("GoogleマップURLまたは住所（変更しない場合は空欄）", "") || "");
+      const nextRadius = window.prompt("許容半径m", row.geoRadiusM ?? 300);
+      const parsed = nextMapUrl ? await resolveGoogleMapsLatLng(nextMapUrl) : null;
+      if (nextMapUrl && !parsed) {
+        alert("URL/住所から位置を取得できませんでした。入力内容を確認してください。");
+        return;
+      }
+      const latNum = parsed ? Number(parsed.lat) : Number(row.geoLat);
+      const lngNum = parsed ? Number(parsed.lng) : Number(row.geoLng);
+      const radiusNum = Number(nextRadius);
+      row.geoLat = Number.isFinite(latNum) ? latNum : null;
+      row.geoLng = Number.isFinite(lngNum) ? lngNum : null;
+      if (nextMapUrl && parsed) {
+        row.geoMapUrl = nextMapUrl;
+        row.geoPlaceName = extractPlaceNameFromMapsUrl(nextMapUrl) || row.geoPlaceName || "";
+      }
+      row.geoRadiusM = Number.isFinite(radiusNum) && radiusNum > 0 ? radiusNum : 300;
+      renderAll();
+      return;
+    }
+    const deleteId = target.getAttribute("data-delete-end-site");
+    if (deleteId) {
+      const row = state.endSites.find((x) => x.id === deleteId);
+      if (!row) return;
+      const usingCount = state.employeeSiteLinks.filter((link) => normalizeText(link.endSiteId) === normalizeText(row.id)).length;
+      const ok = window.confirm(
+        `退勤地点「${row.name}」を削除します。\n関連紐付け ${usingCount}件からは解除されます。\nこの操作は取り消せません。`
+      );
+      if (!ok) return;
+      state.endSites = state.endSites.filter((x) => x.id !== row.id);
+      state.employeeSiteLinks = state.employeeSiteLinks.map((link) =>
+        normalizeText(link.endSiteId) === normalizeText(row.id) ? { ...link, endSiteId: "" } : link
+      );
+      renderAll();
+    }
+  });
+
+  document.getElementById("employeeSiteLinkForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const employeeId = normalizeText(document.getElementById("linkEmployeeId")?.value || "");
+    const siteName = normalizeText(document.getElementById("linkSiteName")?.value || "");
+    const startSiteId = normalizeText(document.getElementById("linkStartSiteId")?.value || "");
+    const endSiteId = normalizeText(document.getElementById("linkEndSiteId")?.value || "");
+    if (!employeeId || !siteName || !startSiteId || !endSiteId) {
+      alert("社員・担当現場・出勤地点・退勤地点をすべて選択してください。");
+      return;
+    }
+    const employee = getEmployeeById(employeeId);
+    const startSite = getSiteById(state.startSites, startSiteId);
+    const endSite = getSiteById(state.endSites, endSiteId);
+    if (!employee || !startSite || !endSite) {
+      alert("紐付け対象が見つかりません。再選択してください。");
+      return;
+    }
+    ensureRouteExists(siteName);
+    const existing = state.employeeSiteLinks.find((row) => normalizeText(row.employeeId) === employeeId);
+    if (existing) {
+      existing.site = siteName;
+      existing.startSiteId = startSiteId;
+      existing.endSiteId = endSiteId;
+      existing.active = true;
+    } else {
+      state.employeeSiteLinks.push({
+        id: uid("esl"),
+        employeeId,
+        site: siteName,
+        startSiteId,
+        endSiteId,
+        active: true,
+      });
+    }
+    setStatusBadge("employeeSiteLinkStatus", "ok", `${employee.name} の勤務地紐付けを保存しました`);
+    renderAll();
+  });
+
+  document.getElementById("employeeSiteLinkBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const editId = target.getAttribute("data-edit-employee-link");
+    if (editId) {
+      const row = state.employeeSiteLinks.find((x) => x.id === editId);
+      if (!row) return;
+      const emp = document.getElementById("linkEmployeeId");
+      const site = document.getElementById("linkSiteName");
+      const start = document.getElementById("linkStartSiteId");
+      const end = document.getElementById("linkEndSiteId");
+      if (emp) emp.value = row.employeeId || "";
+      if (site) site.value = row.site || "";
+      if (start) start.value = row.startSiteId || "";
+      if (end) end.value = row.endSiteId || "";
+      setStatusBadge("employeeSiteLinkStatus", "warn", "編集中（保存で上書き）");
+      return;
+    }
+    const toggleId = target.getAttribute("data-toggle-employee-link");
+    if (toggleId) {
+      const row = state.employeeSiteLinks.find((x) => x.id === toggleId);
+      if (!row) return;
+      row.active = row.active === false ? true : false;
+      renderAll();
+      return;
+    }
+    const deleteId = target.getAttribute("data-delete-employee-link");
+    if (deleteId) {
+      const row = state.employeeSiteLinks.find((x) => x.id === deleteId);
+      if (!row) return;
+      const emp = getEmployeeById(row.employeeId);
+      const ok = window.confirm(`「${emp?.name || "未登録社員"}」の勤務地紐付けを削除しますか？`);
+      if (!ok) return;
+      state.employeeSiteLinks = state.employeeSiteLinks.filter((x) => x.id !== deleteId);
+      renderAll();
     }
   });
 
@@ -2838,40 +3140,51 @@ function bindMasterEvents() {
     e.preventDefault();
     const userId = document.getElementById("lineUserIdInput")?.value.trim();
     const employeeId = document.getElementById("lineMapEmployee")?.value;
-    const site = normalizeText(document.getElementById("lineMapSite")?.value || "");
-    const employee = state.employees.find((x) => x.id === employeeId);
-    if (!userId || !employeeId || !site || !employee) return;
-    const route = state.routes.find((r) => normalizeText(r.name) === site);
-    if (!route) {
-      alert("勤務先を選択してください。");
+    const employee = getEmployeeById(employeeId);
+    if (!userId || !employeeId || !employee) return;
+
+    const link = getEmployeeSiteLink(employeeId);
+    if (!link) {
+      alert("先に「社員/現場設定」でこの社員の出退勤地点を紐付けてください。");
+      markLineMapSaveStatus("warn", "社員の地点紐付けが未設定です");
       return;
     }
-    const geoLat = Number(route.geoLat);
-    const geoLng = Number(route.geoLng);
-    if (!Number.isFinite(geoLat) || !Number.isFinite(geoLng)) {
-      alert("選択した勤務先の位置情報が未設定です。「社員/現場設定」で位置を設定してください。");
-      markLineMapSaveStatus("warn", "勤務先マスタの位置情報が未設定です");
+
+    const startSite = getSiteById(state.startSites, link.startSiteId);
+    const endSite = getSiteById(state.endSites, link.endSiteId);
+    if (!startSite || !endSite) {
+      alert("出勤地点または退勤地点が未設定です。社員/現場設定で確認してください。");
+      markLineMapSaveStatus("warn", "地点マスタの参照が不足しています");
       return;
     }
-    const geoRadiusM = Number.isFinite(Number(route.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300;
-    const geoPlaceName = normalizeText(route.geoPlaceName || route.name || site);
-    const geoMapUrl = normalizeText(route.geoMapUrl || "");
+    const hasStart = hasGeo(startSite.geoLat, startSite.geoLng);
+    const hasEnd = hasGeo(endSite.geoLat, endSite.geoLng);
+    if (!hasStart || !hasEnd) {
+      alert("地点の位置情報が不足しています。地点マスタで位置を設定してください。");
+      markLineMapSaveStatus("warn", "地点の位置情報が不足しています");
+      return;
+    }
+
+    const site = normalizeText(link.site || startSite.name || "未設定");
+    const startRadius = Number.isFinite(Number(startSite.geoRadiusM)) && Number(startSite.geoRadiusM) > 0 ? Number(startSite.geoRadiusM) : 300;
+    const endRadius = Number.isFinite(Number(endSite.geoRadiusM)) && Number(endSite.geoRadiusM) > 0 ? Number(endSite.geoRadiusM) : 300;
+
     await saveLineUserMapping(userId, employeeId, employee.name, site, {
-      geoLat,
-      geoLng,
-      geoRadiusM,
-      geoPlaceName,
-      geoMapUrl,
-      startGeoLat: geoLat,
-      startGeoLng: geoLng,
-      startGeoRadiusM: geoRadiusM,
-      startGeoPlaceName: geoPlaceName,
-      startGeoMapUrl: geoMapUrl,
-      endGeoLat: geoLat,
-      endGeoLng: geoLng,
-      endGeoRadiusM: geoRadiusM,
-      endGeoPlaceName: geoPlaceName,
-      endGeoMapUrl: geoMapUrl,
+      geoLat: Number(startSite.geoLat),
+      geoLng: Number(startSite.geoLng),
+      geoRadiusM: startRadius,
+      geoPlaceName: normalizeText(startSite.geoPlaceName || startSite.name || ""),
+      geoMapUrl: normalizeText(startSite.geoMapUrl || ""),
+      startGeoLat: Number(startSite.geoLat),
+      startGeoLng: Number(startSite.geoLng),
+      startGeoRadiusM: startRadius,
+      startGeoPlaceName: normalizeText(startSite.geoPlaceName || startSite.name || ""),
+      startGeoMapUrl: normalizeText(startSite.geoMapUrl || ""),
+      endGeoLat: Number(endSite.geoLat),
+      endGeoLng: Number(endSite.geoLng),
+      endGeoRadiusM: endRadius,
+      endGeoPlaceName: normalizeText(endSite.geoPlaceName || endSite.name || ""),
+      endGeoMapUrl: normalizeText(endSite.geoMapUrl || ""),
     });
   });
 
@@ -2890,12 +3203,8 @@ function bindMasterEvents() {
     const input = document.getElementById("lineUserIdInput");
     if (input) input.value = userId;
     const empSelect = document.getElementById("lineMapEmployee");
-    const siteSelect = document.getElementById("lineMapSite");
     const empId = target.getAttribute("data-fill-emp-id");
-    const site = target.getAttribute("data-fill-site");
     if (empSelect && empId) empSelect.value = empId;
-    if (siteSelect && site) siteSelect.value = site;
-    applyLineSiteTemplate();
     updateLineMapProgress();
     markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
@@ -3065,20 +3374,15 @@ function bindEvents() {
   });
 
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);
-  document.getElementById("routeUseMapUrlBtn")?.addEventListener("click", async () => {
-    await fillGeoFromMapUrl("route");
+  document.getElementById("startSiteUseMapUrlBtn")?.addEventListener("click", async () => {
+    await fillGeoFromMapUrl("startSite");
   });
-  document.getElementById("routeUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("route"));
-  document.getElementById("lineMapSite")?.addEventListener("change", () => {
-    applyLineSiteTemplate();
-    updateLineMapProgress();
-    markLineMapSaveStatus("neutral", "未保存");
+  document.getElementById("startSiteUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("startSite"));
+  document.getElementById("endSiteUseMapUrlBtn")?.addEventListener("click", async () => {
+    await fillGeoFromMapUrl("endSite");
   });
-  [
-    "lineUserIdInput",
-    "lineMapEmployee",
-    "lineMapSite",
-  ].forEach((id) => {
+  document.getElementById("endSiteUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("endSite"));
+  ["lineUserIdInput", "lineMapEmployee"].forEach((id) => {
     document.getElementById(id)?.addEventListener("input", () => {
       updateLineMapProgress();
       markLineMapSaveStatus("neutral", "未保存");
@@ -3162,6 +3466,7 @@ function bindEvents() {
 
 function init() {
   normalizeEmployeeRows();
+  normalizeSiteMasterRows();
   state.alcoholLimit = normalizeAlcoholLimit(state.alcoholLimit);
   applyTheme(state.theme);
   bindEvents();

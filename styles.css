@@ -266,6 +266,17 @@ button {
   gap: 12px;
 }
 
+.masters-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.masters-card {
+  margin-top: 0;
+}
+
 .panel {
   margin-top: 12px;
   padding: 14px;
@@ -459,6 +470,13 @@ button {
 
 .summary-toolbar .toolbar-actions {
   grid-column: span 7;
+}
+
+.geo-action-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .summary-helper {
@@ -902,6 +920,7 @@ tbody tr:hover td {
   }
 
   .grid-2,
+  .masters-grid,
   .punch-form,
   .big-button-grid,
   .master-form,
