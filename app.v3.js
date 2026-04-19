@@ -1074,7 +1074,10 @@ function updateShiftSelectedEmployeeUI() {
 
   ["shiftSelectedEmployeeLabelB", "shiftSelectedEmployeeLabelC"].forEach((id) => {
     const label = document.getElementById(id);
-    if (label) label.textContent = labelText;
+    if (!label) return;
+    label.textContent = labelText;
+    label.classList.toggle("is-empty", !hasEmployee);
+    label.classList.toggle("is-active", hasEmployee);
   });
 
   const dailyBtn = document.getElementById("sendShiftOneBtn");

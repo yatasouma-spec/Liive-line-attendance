@@ -476,12 +476,16 @@
               <article class="shift-delivery-card">
                 <h3>B. 日付指定で配信</h3>
                 <p class="section-lead">特定日のシフトを配信します（全体/個別）。</p>
-                <div class="selected-employee-row">
-                  <span class="selected-employee-chip" id="shiftSelectedEmployeeLabelB">選択中社員: 未選択</span>
-                </div>
-                <form class="shift-delivery-form-inline">
-                  <input id="shiftSendDate" type="date" required />
+                <div class="shift-employee-picker">
+                  <label for="shiftEmployee">配信対象社員（ここで選択）</label>
                   <select id="shiftEmployee" required></select>
+                  <p class="section-lead">この選択は「C. 期間で配信」の個別配信にも使われます。</p>
+                </div>
+                <div class="selected-employee-row">
+                  <span class="selected-employee-chip is-empty" id="shiftSelectedEmployeeLabelB">選択中社員: 未選択</span>
+                </div>
+                <form class="shift-delivery-form-inline shift-delivery-form-single-action">
+                  <input id="shiftSendDate" type="date" required />
                   <button type="button" class="btn btn-ghost" id="sendShiftOneBtn">選択社員へ個別配信</button>
                 </form>
               </article>
@@ -489,7 +493,7 @@
                 <h3>C. 期間で配信</h3>
                 <p class="section-lead">1週間〜1か月を配信できます（全体/個別）。</p>
                 <div class="selected-employee-row">
-                  <span class="selected-employee-chip" id="shiftSelectedEmployeeLabelC">選択中社員: 未選択</span>
+                  <span class="selected-employee-chip is-empty" id="shiftSelectedEmployeeLabelC">選択中社員: 未選択</span>
                 </div>
                 <form id="shiftRangeForm" class="shift-delivery-form-inline">
                   <input id="shiftRangeStartDate" type="date" required />

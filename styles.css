@@ -540,6 +540,28 @@ button {
   font-size: 0.98rem;
 }
 
+.shift-employee-picker {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--primary-3) 45%, #d9dce7 55%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary-3) 8%, #fff 92%);
+}
+
+.shift-employee-picker label {
+  font-size: 0.84rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.shift-employee-picker select {
+  min-height: 44px;
+  border-color: color-mix(in srgb, var(--primary-3) 55%, #cfd6e8 45%);
+  font-weight: 700;
+  background: #fff;
+}
+
 .selected-employee-row {
   display: flex;
   align-items: center;
@@ -559,10 +581,26 @@ button {
   font-weight: 800;
 }
 
+.selected-employee-chip.is-empty {
+  background: #f7f9fc;
+  color: #5a667d;
+  border-color: #d9deea;
+}
+
+.selected-employee-chip.is-active {
+  background: color-mix(in srgb, var(--ok) 12%, #fff 88%);
+  color: color-mix(in srgb, var(--ok) 72%, #1a1a1a 28%);
+  border-color: color-mix(in srgb, var(--ok) 35%, #cfe7dc 65%);
+}
+
 .shift-delivery-form-inline {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
+}
+
+.shift-delivery-form-single-action {
+  grid-template-columns: minmax(180px, 1fr) auto;
 }
 
 .shift-delivery-grid .toolbar-field.search {
