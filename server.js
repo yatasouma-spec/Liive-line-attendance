@@ -419,16 +419,44 @@ app.post("/api/maps/resolve-latlng", async (req, res) => {
     });
     const resolvedUrl = response.url || input;
     const parsed = parseGoogleMapsLatLng(resolvedUrl);
-    if (!parsed) {
-      return res.status(422).json({ ok: false, error: "latlng not found", resolvedUrl });
+    if (parsed) {
+      return res.json({
+        ok: true,
+        lat: parsed.lat,
+        lng: parsed.lng,
+        placeName: extractPlaceNameFromMapsUrl(resolvedUrl) || extractPlaceNameFromMapsUrl(input),
+        resolvedUrl,
+      });
     }
-    return res.json({
-      ok: true,
-      lat: parsed.lat,
-      lng: parsed.lng,
-      placeName: extractPlaceNameFromMapsUrl(resolvedUrl) || extractPlaceNameFromMapsUrl(input),
-      resolvedUrl,
-    });
+
+    // URLに座標が無い場合、レスポンス本文の埋め込みパラメータ（!2d..!3d..）から抽出を試す
+    const bodyText = await response.text();
+    const parsedFromBody = parseGoogleMapsLatLng(bodyText);
+    if (parsedFromBody) {
+      return res.json({
+        ok: true,
+        lat: parsedFromBody.lat,
+        lng: parsedFromBody.lng,
+        placeName: extractPlaceNameFromMapsUrl(resolvedUrl) || extractPlaceNameFromMapsUrl(input),
+        resolvedUrl,
+      });
+    }
+
+    const addressCandidate = extractAddressFromMapsUrl(resolvedUrl) || extractAddressFromMapsUrl(input);
+    if (addressCandidate) {
+      const resolvedByAddress = await geocodeAddress(addressCandidate);
+      if (resolvedByAddress) {
+        return res.json({
+          ok: true,
+          lat: resolvedByAddress.lat,
+          lng: resolvedByAddress.lng,
+          placeName: resolvedByAddress.placeName || addressCandidate,
+          resolvedUrl,
+        });
+      }
+    }
+
+    return res.status(422).json({ ok: false, error: "latlng not found", resolvedUrl });
   } catch (error) {
     return res.status(500).json({ ok: false, error: "resolve failed", message: String(error?.message || error) });
   }
@@ -827,20 +855,49 @@ function parseGoogleMapsLatLng(urlText) {
     }
   })();
   const patterns = [
-    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /[?&]center=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+    { re: /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /[?&]center=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /!2d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/, lat: 2, lng: 1 },
+    { re: /%213d(-?\d+(?:\.\d+)?)%214d(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /%212d(-?\d+(?:\.\d+)?)%213d(-?\d+(?:\.\d+)?)/, lat: 2, lng: 1 },
   ];
   for (const p of patterns) {
-    const m = decoded.match(p);
+    const m = decoded.match(p.re);
     if (!m) continue;
-    const lat = Number(m[1]);
-    const lng = Number(m[2]);
+    const lat = Number(m[p.lat]);
+    const lng = Number(m[p.lng]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;
+}
+
+function extractAddressFromMapsUrl(urlText) {
+  const text = String(urlText || "").trim();
+  if (!text) return "";
+  const candidates = [text];
+  try {
+    candidates.push(decodeURIComponent(text));
+  } catch (_e) {}
+
+  for (const raw of candidates) {
+    try {
+      const url = new URL(raw);
+      for (const key of ["q", "query", "destination", "daddr"]) {
+        const value = String(url.searchParams.get(key) || "").trim();
+        if (!value) continue;
+        if (/^-?\d+(?:\.\d+)?,\s*-?\d+(?:\.\d+)?$/.test(value)) continue;
+        try {
+          return decodeURIComponent(value).replace(/\+/g, " ").trim();
+        } catch (_e) {
+          return value.replace(/\+/g, " ").trim();
+        }
+      }
+    } catch (_e) {}
+  }
+  return "";
 }
 
 function looksLikeUrl(text) {
