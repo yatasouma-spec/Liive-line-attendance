@@ -517,7 +517,7 @@
         <section class="view" data-view="lineusers">
           <section class="panel">
             <h2>LINEユーザー紐付け（1分設定）</h2>
-            <p class="section-lead">社員と勤務先を選び、開始地点→退勤地点の順に設定して保存してください。</p>
+            <p class="section-lead">社員と勤務先を選ぶだけで紐付けできます。位置情報は勤務先マスタから自動反映されます。</p>
             <form id="lineMapForm" class="line-map-form line-map-form-single">
               <section class="line-map-card line-map-card-basic">
                 <h3>1. 社員情報</h3>
@@ -528,37 +528,23 @@
               </section>
 
               <section class="line-map-card line-map-card-start">
-                <h3>2. 開始地点（出勤地点）</h3>
-                <label class="line-map-label" for="lineMapStartGeoMapUrl">GoogleマップURL / 住所</label>
-                <input id="lineMapStartGeoMapUrl" type="text" placeholder="開始地点のGoogleマップURL または 住所" />
-                <div class="line-map-actions">
-                  <button type="button" class="btn btn-ghost" id="lineMapUseStartMapUrlBtn">開始地点をURL/住所から設定</button>
-                </div>
-                <p class="line-map-help">地点名: <span id="lineMapStartGeoPlacePreview">未設定</span></p>
-                <input id="lineMapStartGeoPlaceName" type="hidden" />
-                <label class="line-map-label" for="lineMapStartGeoRadius">許容半径（m）</label>
-                <input id="lineMapStartGeoRadius" type="number" min="50" step="10" placeholder="開始地点の許容半径m（例: 300）" value="300" />
+                <h3>2. 勤務先地点（自動適用）</h3>
+                <p class="section-lead">「社員/現場設定」で登録した地点を、出勤・退勤の判定に自動適用します。</p>
+                <p class="line-map-help">選択中の勤務先: <strong id="lineMapSelectedSiteName">未選択</strong></p>
+                <p class="line-map-help">出勤地点: <span id="lineMapStartGeoPlacePreview">未設定</span></p>
                 <p id="lineMapStartStatus" class="line-map-status neutral">未設定</p>
+                <p class="line-map-help">退勤地点: <span id="lineMapEndGeoPlacePreview">未設定</span></p>
+                <p id="lineMapEndStatus" class="line-map-status neutral">未設定</p>
+
+                <input id="lineMapSameEndAsStart" type="hidden" value="1" />
+                <input id="lineMapStartGeoMapUrl" type="hidden" />
+                <input id="lineMapStartGeoPlaceName" type="hidden" />
+                <input id="lineMapStartGeoRadius" type="hidden" value="300" />
                 <input id="lineMapStartGeoLat" type="hidden" />
                 <input id="lineMapStartGeoLng" type="hidden" />
-              </section>
-
-              <section class="line-map-card line-map-card-end">
-                <h3>3. 退勤地点</h3>
-                <label class="line-map-inline">
-                  <input id="lineMapSameEndAsStart" type="checkbox" checked />
-                  退勤地点は開始地点と同じ
-                </label>
-                <label class="line-map-label" for="lineMapEndGeoMapUrl">GoogleマップURL / 住所</label>
-                <input id="lineMapEndGeoMapUrl" type="text" placeholder="退勤地点のGoogleマップURL または 住所（同じ場所なら不要）" />
-                <div class="line-map-actions">
-                  <button type="button" class="btn btn-ghost" id="lineMapUseEndMapUrlBtn">退勤地点をURL/住所から設定</button>
-                </div>
-                <p class="line-map-help">地点名: <span id="lineMapEndGeoPlacePreview">未設定</span></p>
+                <input id="lineMapEndGeoMapUrl" type="hidden" />
                 <input id="lineMapEndGeoPlaceName" type="hidden" />
-                <label class="line-map-label" for="lineMapEndGeoRadius">許容半径（m）</label>
-                <input id="lineMapEndGeoRadius" type="number" min="50" step="10" placeholder="退勤地点の許容半径m（例: 300）" value="300" />
-                <p id="lineMapEndStatus" class="line-map-status neutral">未設定</p>
+                <input id="lineMapEndGeoRadius" type="hidden" value="300" />
                 <input id="lineMapEndGeoLat" type="hidden" />
                 <input id="lineMapEndGeoLng" type="hidden" />
               </section>

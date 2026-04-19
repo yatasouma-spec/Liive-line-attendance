@@ -353,8 +353,6 @@ async function fillGeoFromMapUrl(prefix) {
 }
 
 function syncEndLocationFromStart() {
-  const sameCheckbox = document.getElementById("lineMapSameEndAsStart");
-  if (!sameCheckbox?.checked) return;
   const startMapUrl = document.getElementById("lineMapStartGeoMapUrl")?.value || "";
   const startPlace = document.getElementById("lineMapStartGeoPlaceName")?.value || "";
   const startLat = document.getElementById("lineMapStartGeoLat")?.value || "";
@@ -374,18 +372,7 @@ function syncEndLocationFromStart() {
 }
 
 function applyEndLocationMode() {
-  const sameCheckbox = document.getElementById("lineMapSameEndAsStart");
-  const endMapUrl = document.getElementById("lineMapEndGeoMapUrl");
-  const endSetBtn = document.getElementById("lineMapUseEndMapUrlBtn");
-  const endRadius = document.getElementById("lineMapEndGeoRadius");
-  if (!sameCheckbox || !endMapUrl || !endSetBtn || !endRadius) return;
-  const locked = Boolean(sameCheckbox.checked);
-  endMapUrl.disabled = locked;
-  endSetBtn.disabled = locked;
-  endRadius.disabled = locked;
-  if (locked) {
-    syncEndLocationFromStart();
-  }
+  syncEndLocationFromStart();
   updateLineMapProgress();
 }
 
@@ -409,24 +396,49 @@ function markLineMapSaveStatus(klass, text) {
 }
 
 function updateLineMapProgress() {
-  const startLat = Number(document.getElementById("lineMapStartGeoLat")?.value || NaN);
-  const startLng = Number(document.getElementById("lineMapStartGeoLng")?.value || NaN);
-  const sameCheckbox = document.getElementById("lineMapSameEndAsStart");
-  const sameAsStart = Boolean(sameCheckbox?.checked);
-  const endLat = sameAsStart ? startLat : Number(document.getElementById("lineMapEndGeoLat")?.value || NaN);
-  const endLng = sameAsStart ? startLng : Number(document.getElementById("lineMapEndGeoLng")?.value || NaN);
-
-  if (Number.isFinite(startLat) && Number.isFinite(startLng)) {
-    setStatusBadge("lineMapStartStatus", "ok", "設定済み");
-  } else {
+  const siteName = normalizeText(document.getElementById("lineMapSite")?.value || "");
+  const selectedSiteLabel = document.getElementById("lineMapSelectedSiteName");
+  if (selectedSiteLabel) selectedSiteLabel.textContent = siteName || "未選択";
+  if (!siteName) {
     setStatusBadge("lineMapStartStatus", "neutral", "未設定");
+    setStatusBadge("lineMapEndStatus", "neutral", "未設定");
+    syncLineMapPlacePreview("lineMapStart");
+    syncLineMapPlacePreview("lineMapEnd");
+    return;
   }
 
-  if (Number.isFinite(endLat) && Number.isFinite(endLng)) {
-    setStatusBadge("lineMapEndStatus", "ok", sameAsStart ? "設定済み（開始地点と同じ）" : "設定済み");
+  const route = state.routes.find((r) => normalizeText(r.name) === siteName);
+  const routeLat = Number(route?.geoLat);
+  const routeLng = Number(route?.geoLng);
+  const routeRadius = Number.isFinite(Number(route?.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300;
+  const routePlace = normalizeText(route?.geoPlaceName || route?.name || siteName);
+  const routeMapUrl = normalizeText(route?.geoMapUrl || "");
+
+  if (route && Number.isFinite(routeLat) && Number.isFinite(routeLng)) {
+    setGeoInputs("lineMapStart", routeLat, routeLng, routePlace, routeMapUrl);
+    const startRadiusEl = document.getElementById("lineMapStartGeoRadius");
+    if (startRadiusEl) startRadiusEl.value = String(routeRadius);
+    syncEndLocationFromStart();
+    setStatusBadge("lineMapStartStatus", "ok", "設定済み（勤務先マスタ）");
+    setStatusBadge("lineMapEndStatus", "ok", "設定済み（勤務先マスタ）");
   } else {
-    setStatusBadge("lineMapEndStatus", "warn", "未設定");
+    const startLatEl = document.getElementById("lineMapStartGeoLat");
+    const startLngEl = document.getElementById("lineMapStartGeoLng");
+    const startPlaceEl = document.getElementById("lineMapStartGeoPlaceName");
+    const endLatEl = document.getElementById("lineMapEndGeoLat");
+    const endLngEl = document.getElementById("lineMapEndGeoLng");
+    const endPlaceEl = document.getElementById("lineMapEndGeoPlaceName");
+    if (startLatEl) startLatEl.value = "";
+    if (startLngEl) startLngEl.value = "";
+    if (startPlaceEl) startPlaceEl.value = "";
+    if (endLatEl) endLatEl.value = "";
+    if (endLngEl) endLngEl.value = "";
+    if (endPlaceEl) endPlaceEl.value = "";
+    setStatusBadge("lineMapStartStatus", "warn", "勤務先マスタで位置設定してください");
+    setStatusBadge("lineMapEndStatus", "warn", "勤務先マスタで位置設定してください");
   }
+  syncLineMapPlacePreview("lineMapStart");
+  syncLineMapPlacePreview("lineMapEnd");
 }
 
 function syncLineMapPlacePreview(prefix) {
@@ -438,36 +450,7 @@ function syncLineMapPlacePreview(prefix) {
 }
 
 function applyLineSiteTemplate() {
-  const siteSelect = document.getElementById("lineMapSite");
-  if (!(siteSelect instanceof HTMLSelectElement)) return;
-  const routeName = normalizeText(siteSelect.value);
-  if (!routeName) return;
-  const route = state.routes.find((r) => normalizeText(r.name) === routeName);
-  if (!route) return;
-
-  if (Number.isFinite(Number(route.geoLat)) && Number.isFinite(Number(route.geoLng))) {
-    if (document.getElementById("lineMapStartGeoLat")) document.getElementById("lineMapStartGeoLat").value = Number(route.geoLat).toFixed(6);
-    if (document.getElementById("lineMapStartGeoLng")) document.getElementById("lineMapStartGeoLng").value = Number(route.geoLng).toFixed(6);
-    if (document.getElementById("lineMapStartGeoRadius")) {
-      document.getElementById("lineMapStartGeoRadius").value = String(
-        Number.isFinite(Number(route.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300
-      );
-    }
-    if (document.getElementById("lineMapStartGeoPlaceName")) {
-      document.getElementById("lineMapStartGeoPlaceName").value = normalizeText(route.geoPlaceName || route.name || "");
-    }
-    if (document.getElementById("lineMapStartGeoMapUrl")) {
-      document.getElementById("lineMapStartGeoMapUrl").value = normalizeText(route.geoMapUrl || "");
-    }
-    syncEndLocationFromStart();
-    syncLineMapPlacePreview("lineMapStart");
-    syncLineMapPlacePreview("lineMapEnd");
-    updateLineMapProgress();
-  } else {
-    setStatusBadge("lineMapStartStatus", "warn", "選択した現場に位置情報が未設定です");
-    setStatusBadge("lineMapEndStatus", "warn", "開始地点を設定してください");
-  }
-
+  updateLineMapProgress();
   markLineMapSaveStatus("warn", "編集中（保存してください）");
 }
 
@@ -629,7 +612,24 @@ function formatStartGeoCell(row) {
 }
 
 function formatEndGeoCell(row) {
-  return formatGeoDisplay(row?.endGeoPlaceName, row?.endGeoLat, row?.endGeoLng, row?.endGeoRadiusM);
+  return formatGeoDisplay(
+    row?.endGeoPlaceName || row?.startGeoPlaceName || row?.geoPlaceName,
+    row?.endGeoLat ?? row?.startGeoLat ?? row?.geoLat,
+    row?.endGeoLng ?? row?.startGeoLng ?? row?.geoLng,
+    row?.endGeoRadiusM ?? row?.startGeoRadiusM ?? row?.geoRadiusM
+  );
+}
+
+function hasGeo(latRaw, lngRaw) {
+  return Number.isFinite(Number(latRaw)) && Number.isFinite(Number(lngRaw));
+}
+
+function lineMappingStatusBadge(row) {
+  const hasStart = hasGeo(row?.startGeoLat ?? row?.geoLat, row?.startGeoLng ?? row?.geoLng);
+  const hasEnd = hasGeo(row?.endGeoLat ?? row?.startGeoLat ?? row?.geoLat, row?.endGeoLng ?? row?.startGeoLng ?? row?.geoLng);
+  if (!hasStart) return '<span class="badge warn">位置未設定</span>';
+  if (!hasEnd) return '<span class="badge warn">退勤地点未設定</span>';
+  return '<span class="badge ok">開始/退勤 設定済み</span>';
 }
 
 function employeeBufferLabel(employeeRow) {
@@ -1446,9 +1446,9 @@ function renderMasters() {
       <td>${displaySiteLabel(u.site)}</td>
       <td>${formatStartGeoCell(u)}</td>
       <td>${formatEndGeoCell(u)}</td>
-      <td>${u.startGeoLat || u.geoLat ? (u.endGeoLat ? '<span class="badge ok">開始/退勤 設定済み</span>' : '<span class="badge warn">開始のみ設定</span>') : '<span class="badge warn">未設定</span>'}</td>
+      <td>${lineMappingStatusBadge(u)}</td>
       <td>
-        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}" data-fill-start-geo-place-name="${u.startGeoPlaceName || u.geoPlaceName || ""}" data-fill-start-geo-map-url="${u.startGeoMapUrl || u.geoMapUrl || ""}" data-fill-start-geo-lat="${u.startGeoLat ?? u.geoLat ?? ""}" data-fill-start-geo-lng="${u.startGeoLng ?? u.geoLng ?? ""}" data-fill-start-geo-radius="${u.startGeoRadiusM ?? u.geoRadiusM ?? ""}" data-fill-end-geo-place-name="${u.endGeoPlaceName || ""}" data-fill-end-geo-map-url="${u.endGeoMapUrl || ""}" data-fill-end-geo-lat="${u.endGeoLat ?? ""}" data-fill-end-geo-lng="${u.endGeoLng ?? ""}" data-fill-end-geo-radius="${u.endGeoRadiusM ?? ""}">このIDを入力</button>
+        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${u.employeeId || ""}" data-fill-site="${u.site || ""}">このIDを入力</button>
         <button class="btn btn-ghost" data-unmap-line-user="${u.userId}">紐付け解除</button>
       </td>
     </tr>`
@@ -2836,50 +2836,42 @@ function bindMasterEvents() {
 
   document.getElementById("lineMapForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const sameEndAsStart = Boolean(document.getElementById("lineMapSameEndAsStart")?.checked);
     const userId = document.getElementById("lineUserIdInput")?.value.trim();
     const employeeId = document.getElementById("lineMapEmployee")?.value;
     const site = normalizeText(document.getElementById("lineMapSite")?.value || "");
-    const startMapUrl = normalizeText(document.getElementById("lineMapStartGeoMapUrl")?.value || "");
-    const startPlaceName = normalizeText(document.getElementById("lineMapStartGeoPlaceName")?.value || "");
-    const startGeoLat = Number(document.getElementById("lineMapStartGeoLat")?.value || NaN);
-    const startGeoLng = Number(document.getElementById("lineMapStartGeoLng")?.value || NaN);
-    const startGeoRadiusM = Number(document.getElementById("lineMapStartGeoRadius")?.value || 300);
-    const endMapUrlRaw = normalizeText(document.getElementById("lineMapEndGeoMapUrl")?.value || "");
-    const endPlaceNameRaw = normalizeText(document.getElementById("lineMapEndGeoPlaceName")?.value || "");
-    const endGeoLatRaw = Number(document.getElementById("lineMapEndGeoLat")?.value || NaN);
-    const endGeoLngRaw = Number(document.getElementById("lineMapEndGeoLng")?.value || NaN);
-    const endGeoRadiusRaw = Number(document.getElementById("lineMapEndGeoRadius")?.value || 300);
-    const endMapUrl = sameEndAsStart ? startMapUrl : endMapUrlRaw;
-    const endPlaceName = sameEndAsStart ? startPlaceName : endPlaceNameRaw;
-    const endGeoLat = sameEndAsStart ? startGeoLat : endGeoLatRaw;
-    const endGeoLng = sameEndAsStart ? startGeoLng : endGeoLngRaw;
-    const endGeoRadiusM = sameEndAsStart ? startGeoRadiusM : endGeoRadiusRaw;
     const employee = state.employees.find((x) => x.id === employeeId);
     if (!userId || !employeeId || !site || !employee) return;
-    if (!Number.isFinite(startGeoLat) || !Number.isFinite(startGeoLng)) {
-      alert("開始地点のURL/住所を入力して「開始地点をURLから設定」を押してください。");
+    const route = state.routes.find((r) => normalizeText(r.name) === site);
+    if (!route) {
+      alert("勤務先を選択してください。");
       return;
     }
-    if (!sameEndAsStart && (!Number.isFinite(endGeoLat) || !Number.isFinite(endGeoLng))) {
-      markLineMapSaveStatus("warn", "退勤地点が未設定です（開始地点のみで保存可）");
+    const geoLat = Number(route.geoLat);
+    const geoLng = Number(route.geoLng);
+    if (!Number.isFinite(geoLat) || !Number.isFinite(geoLng)) {
+      alert("選択した勤務先の位置情報が未設定です。「社員/現場設定」で位置を設定してください。");
+      markLineMapSaveStatus("warn", "勤務先マスタの位置情報が未設定です");
+      return;
     }
+    const geoRadiusM = Number.isFinite(Number(route.geoRadiusM)) && Number(route.geoRadiusM) > 0 ? Number(route.geoRadiusM) : 300;
+    const geoPlaceName = normalizeText(route.geoPlaceName || route.name || site);
+    const geoMapUrl = normalizeText(route.geoMapUrl || "");
     await saveLineUserMapping(userId, employeeId, employee.name, site, {
-      geoLat: startGeoLat,
-      geoLng: startGeoLng,
-      geoRadiusM: Number.isFinite(startGeoRadiusM) && startGeoRadiusM > 0 ? startGeoRadiusM : 300,
-      geoPlaceName: startPlaceName || site,
-      geoMapUrl: startMapUrl || "",
-      startGeoLat,
-      startGeoLng,
-      startGeoRadiusM: Number.isFinite(startGeoRadiusM) && startGeoRadiusM > 0 ? startGeoRadiusM : 300,
-      startGeoPlaceName: startPlaceName || site,
-      startGeoMapUrl: startMapUrl || "",
-      endGeoLat: Number.isFinite(endGeoLat) ? endGeoLat : null,
-      endGeoLng: Number.isFinite(endGeoLng) ? endGeoLng : null,
-      endGeoRadiusM: Number.isFinite(endGeoRadiusM) && endGeoRadiusM > 0 ? endGeoRadiusM : 300,
-      endGeoPlaceName: endPlaceName || "",
-      endGeoMapUrl: endMapUrl || "",
+      geoLat,
+      geoLng,
+      geoRadiusM,
+      geoPlaceName,
+      geoMapUrl,
+      startGeoLat: geoLat,
+      startGeoLng: geoLng,
+      startGeoRadiusM: geoRadiusM,
+      startGeoPlaceName: geoPlaceName,
+      startGeoMapUrl: geoMapUrl,
+      endGeoLat: geoLat,
+      endGeoLng: geoLng,
+      endGeoRadiusM: geoRadiusM,
+      endGeoPlaceName: geoPlaceName,
+      endGeoMapUrl: geoMapUrl,
     });
   });
 
@@ -2899,52 +2891,11 @@ function bindMasterEvents() {
     if (input) input.value = userId;
     const empSelect = document.getElementById("lineMapEmployee");
     const siteSelect = document.getElementById("lineMapSite");
-    const startMapUrlInput = document.getElementById("lineMapStartGeoMapUrl");
-    const startPlaceInput = document.getElementById("lineMapStartGeoPlaceName");
-    const startLatInput = document.getElementById("lineMapStartGeoLat");
-    const startLngInput = document.getElementById("lineMapStartGeoLng");
-    const startRadiusInput = document.getElementById("lineMapStartGeoRadius");
-    const endMapUrlInput = document.getElementById("lineMapEndGeoMapUrl");
-    const endPlaceInput = document.getElementById("lineMapEndGeoPlaceName");
-    const endLatInput = document.getElementById("lineMapEndGeoLat");
-    const endLngInput = document.getElementById("lineMapEndGeoLng");
-    const endRadiusInput = document.getElementById("lineMapEndGeoRadius");
     const empId = target.getAttribute("data-fill-emp-id");
     const site = target.getAttribute("data-fill-site");
-    const startGeoPlaceName = target.getAttribute("data-fill-start-geo-place-name");
-    const startGeoMapUrl = target.getAttribute("data-fill-start-geo-map-url");
-    const startGeoLat = target.getAttribute("data-fill-start-geo-lat");
-    const startGeoLng = target.getAttribute("data-fill-start-geo-lng");
-    const startGeoRadius = target.getAttribute("data-fill-start-geo-radius");
-    const endGeoPlaceName = target.getAttribute("data-fill-end-geo-place-name");
-    const endGeoMapUrl = target.getAttribute("data-fill-end-geo-map-url");
-    const endGeoLat = target.getAttribute("data-fill-end-geo-lat");
-    const endGeoLng = target.getAttribute("data-fill-end-geo-lng");
-    const endGeoRadius = target.getAttribute("data-fill-end-geo-radius");
-    const sameEndCheckbox = document.getElementById("lineMapSameEndAsStart");
     if (empSelect && empId) empSelect.value = empId;
     if (siteSelect && site) siteSelect.value = site;
-    if (startMapUrlInput && startGeoMapUrl) startMapUrlInput.value = startGeoMapUrl;
-    if (startPlaceInput && startGeoPlaceName) startPlaceInput.value = startGeoPlaceName;
-    if (startLatInput && startGeoLat) startLatInput.value = startGeoLat;
-    if (startLngInput && startGeoLng) startLngInput.value = startGeoLng;
-    if (startRadiusInput && startGeoRadius) startRadiusInput.value = startGeoRadius;
-    if (endMapUrlInput && endGeoMapUrl) endMapUrlInput.value = endGeoMapUrl;
-    if (endPlaceInput && endGeoPlaceName) endPlaceInput.value = endGeoPlaceName;
-    if (endLatInput && endGeoLat) endLatInput.value = endGeoLat;
-    if (endLngInput && endGeoLng) endLngInput.value = endGeoLng;
-    if (endRadiusInput && endGeoRadius) endRadiusInput.value = endGeoRadius;
-    if (sameEndCheckbox) {
-      const noEnd = !normalizeText(endGeoLat || "") || !normalizeText(endGeoLng || "");
-      const sameAsStart =
-        noEnd ||
-        (normalizeText(startGeoLat || "") === normalizeText(endGeoLat || "") &&
-          normalizeText(startGeoLng || "") === normalizeText(endGeoLng || ""));
-      sameEndCheckbox.checked = sameAsStart;
-      applyEndLocationMode();
-    }
-    syncLineMapPlacePreview("lineMapStart");
-    syncLineMapPlacePreview("lineMapEnd");
+    applyLineSiteTemplate();
     updateLineMapProgress();
     markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
@@ -3118,55 +3069,23 @@ function bindEvents() {
     await fillGeoFromMapUrl("route");
   });
   document.getElementById("routeUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("route"));
-  document.getElementById("lineMapUseStartMapUrlBtn")?.addEventListener("click", async () => {
-    const ok = await fillGeoFromMapUrl("lineMapStart");
-    if (!ok) return;
-    syncEndLocationFromStart();
-    updateLineMapProgress();
-    markLineMapSaveStatus("warn", "編集中（保存してください）");
-  });
-  document.getElementById("lineMapUseEndMapUrlBtn")?.addEventListener("click", async () => {
-    const ok = await fillGeoFromMapUrl("lineMapEnd");
-    if (!ok) return;
-    updateLineMapProgress();
-    markLineMapSaveStatus("warn", "編集中（保存してください）");
-  });
   document.getElementById("lineMapSite")?.addEventListener("change", () => {
     applyLineSiteTemplate();
     updateLineMapProgress();
-    markLineMapSaveStatus("neutral", "未保存");
-  });
-  document.getElementById("lineMapSameEndAsStart")?.addEventListener("change", () => {
-    applyEndLocationMode();
     markLineMapSaveStatus("neutral", "未保存");
   });
   [
     "lineUserIdInput",
     "lineMapEmployee",
     "lineMapSite",
-    "lineMapStartGeoMapUrl",
-    "lineMapStartGeoRadius",
-    "lineMapEndGeoMapUrl",
-    "lineMapEndGeoRadius",
   ].forEach((id) => {
     document.getElementById(id)?.addEventListener("input", () => {
-      if (id === "lineMapStartGeoMapUrl" || id === "lineMapStartGeoRadius") {
-        syncEndLocationFromStart();
-      }
       updateLineMapProgress();
       markLineMapSaveStatus("neutral", "未保存");
     });
     document.getElementById(id)?.addEventListener("change", () => {
-      if (id === "lineMapStartGeoMapUrl" || id === "lineMapStartGeoRadius") {
-        syncEndLocationFromStart();
-      }
       updateLineMapProgress();
       markLineMapSaveStatus("neutral", "未保存");
-    });
-  });
-  ["lineMapStartGeoPlaceName", "lineMapEndGeoPlaceName"].forEach((id) => {
-    document.getElementById(id)?.addEventListener("input", () => {
-      syncLineMapPlacePreview(id.includes("Start") ? "lineMapStart" : "lineMapEnd");
     });
   });
 
