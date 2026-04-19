@@ -402,17 +402,20 @@ function parseGoogleMapsLatLng(urlText) {
     }
   })();
   const patterns = [
-    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /[?&]center=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+    { re: /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /[?&]center=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /!2d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/, lat: 2, lng: 1 },
+    { re: /%213d(-?\d+(?:\.\d+)?)%214d(-?\d+(?:\.\d+)?)/, lat: 1, lng: 2 },
+    { re: /%212d(-?\d+(?:\.\d+)?)%213d(-?\d+(?:\.\d+)?)/, lat: 2, lng: 1 },
   ];
   for (const p of patterns) {
-    const m = decoded.match(p);
+    const m = decoded.match(p.re);
     if (!m) continue;
-    const lat = Number(m[1]);
-    const lng = Number(m[2]);
+    const lat = Number(m[p.lat]);
+    const lng = Number(m[p.lng]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;

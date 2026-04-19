@@ -429,9 +429,9 @@ app.post("/api/maps/resolve-latlng", async (req, res) => {
       });
     }
 
-    // URLに座標が無い場合、レスポンス本文の埋め込みパラメータ（!2d..!3d..）から抽出を試す
+    // URLに座標が無い場合、レスポンス本文の preview/place リンクから抽出を試す
     const bodyText = await response.text();
-    const parsedFromBody = parseGoogleMapsLatLng(bodyText);
+    const parsedFromBody = parsePreviewPlaceLatLngFromMapsHtml(bodyText);
     if (parsedFromBody) {
       return res.json({
         ok: true,
@@ -872,6 +872,15 @@ function parseGoogleMapsLatLng(urlText) {
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;
+}
+
+function parsePreviewPlaceLatLngFromMapsHtml(htmlText) {
+  const text = String(htmlText || "");
+  if (!text) return null;
+  const match = text.match(/<link[^>]+href=\"([^\"]*\/maps\/preview\/place[^\"]+)\"/i);
+  if (!match?.[1]) return null;
+  const href = match[1].replace(/&amp;/g, "&");
+  return parseGoogleMapsLatLng(href);
 }
 
 function extractAddressFromMapsUrl(urlText) {
