@@ -1063,6 +1063,31 @@ function populateSelectors() {
     if (prev && [...el.options].some((o) => o.value === prev)) el.value = prev;
   });
 
+  updateShiftSelectedEmployeeUI();
+}
+
+function updateShiftSelectedEmployeeUI() {
+  const employeeSelect = document.getElementById("shiftEmployee");
+  const selectedEmployee = normalizeText(employeeSelect?.value || "");
+  const hasEmployee = !!selectedEmployee;
+  const labelText = `選択中社員: ${hasEmployee ? selectedEmployee : "未選択"}`;
+
+  ["shiftSelectedEmployeeLabelB", "shiftSelectedEmployeeLabelC"].forEach((id) => {
+    const label = document.getElementById(id);
+    if (label) label.textContent = labelText;
+  });
+
+  const dailyBtn = document.getElementById("sendShiftOneBtn");
+  if (dailyBtn) {
+    dailyBtn.textContent = hasEmployee ? `${selectedEmployee}へ個別配信` : "社員を選択して個別配信";
+    dailyBtn.disabled = !hasEmployee;
+  }
+
+  const rangeBtn = document.getElementById("sendShiftRangeOneBtn");
+  if (rangeBtn) {
+    rangeBtn.textContent = hasEmployee ? `${selectedEmployee}へ期間配信` : "社員を選択して期間配信";
+    rangeBtn.disabled = !hasEmployee;
+  }
 }
 
 function renderDashboard() {
@@ -3367,6 +3392,7 @@ function bindEvents() {
     plus7.setDate(plus7.getDate() + 6);
     shiftRangeEndDate.value = plus7.toISOString().slice(0, 10);
   }
+  document.getElementById("shiftEmployee")?.addEventListener("change", updateShiftSelectedEmployeeUI);
   const leaveDate = document.getElementById("leaveDate");
   if (leaveDate) leaveDate.value = new Date().toISOString().slice(0, 10);
 
