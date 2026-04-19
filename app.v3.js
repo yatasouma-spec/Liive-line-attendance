@@ -333,6 +333,32 @@ function normalizeText(value) {
   return String(value).trim();
 }
 
+function normalizeTimeText(value) {
+  const text = normalizeText(value);
+  if (!text) return "";
+  const match = text.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!match) return "";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return "";
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return "";
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function isCorrectionEditorActive() {
+  const active = document.activeElement;
+  return (
+    active instanceof HTMLElement &&
+    Boolean(active.closest("#correctionDeskBody")) &&
+    active.hasAttribute("data-correction-field")
+  );
+}
+
+function renderAllUnlessCorrectionEditing() {
+  if (isCorrectionEditorActive()) return;
+  renderAll();
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replaceAll("&", "&amp;")
@@ -1229,8 +1255,8 @@ function renderCorrectionDesk() {
     .map((req) => {
       const fixStatus = req.fixStatus || "normal";
       const isOvertimeReview = req.requestType === "overtime_review";
-      const inVal = isValidTimeText(req.newCheckIn) ? req.newCheckIn : "";
-      const outVal = isValidTimeText(req.newCheckOut) ? req.newCheckOut : "";
+      const inVal = normalizeTimeText(req.newCheckIn);
+      const outVal = normalizeTimeText(req.newCheckOut);
       const requestedAt = req.requestedAt || "-";
       const requestedBy = req.requestedBy || req.employee || "-";
       const siteLabel = displaySiteLabel(req.site);
@@ -1772,7 +1798,7 @@ function recalcByTimes(date, checkIn, checkOut, breakMin, employeeName = "") {
 }
 
 function isValidTimeText(text) {
-  return /^\d{2}:\d{2}$/.test(String(text || ""));
+  return Boolean(normalizeTimeText(text));
 }
 
 function correctionStatusLabel(status) {
@@ -1859,8 +1885,8 @@ function collectCorrectionOverride(id) {
 
   return {
     fixStatus: normalizeText(statusEl?.value || req.fixStatus || "normal"),
-    newCheckIn: normalizeText(inEl?.value ?? req.newCheckIn),
-    newCheckOut: normalizeText(outEl?.value ?? req.newCheckOut),
+    newCheckIn: normalizeTimeText(inEl?.value ?? req.newCheckIn),
+    newCheckOut: normalizeTimeText(outEl?.value ?? req.newCheckOut),
     newBreakMin: Number(req.newBreakMin || 0),
     reason: normalizeText(reasonEl?.value || req.reason || ""),
   };
@@ -1939,8 +1965,8 @@ function approveCorrection(id, override = null) {
 
   const payload = {
     fixStatus: normalizeText(override?.fixStatus || req.fixStatus || "normal"),
-    newCheckIn: normalizeText(override?.newCheckIn ?? req.newCheckIn),
-    newCheckOut: normalizeText(override?.newCheckOut ?? req.newCheckOut),
+    newCheckIn: normalizeTimeText(override?.newCheckIn ?? req.newCheckIn),
+    newCheckOut: normalizeTimeText(override?.newCheckOut ?? req.newCheckOut),
     newBreakMin: Number(override?.newBreakMin ?? req.newBreakMin ?? 0),
     reason: normalizeText(override?.reason || req.reason || ""),
   };
@@ -2336,7 +2362,7 @@ async function pullSnapshot() {
     const data = await apiRequest("/api/bootstrap");
     if (!data || !data.ok) return;
     applySnapshot(data);
-    renderAll();
+    renderAllUnlessCorrectionEditing();
   } catch (_e) {}
 }
 
@@ -2347,7 +2373,7 @@ async function fetchLineUsers() {
     if (!data?.ok) return;
     state.lineUsers = Array.isArray(data.users) ? data.users : [];
     reconcileLineDisplayNames();
-    renderAll();
+    renderAllUnlessCorrectionEditing();
   } catch (_e) {}
 }
 
@@ -3455,8 +3481,8 @@ function bindEvents() {
     const req = state.pendingCorrections.find((p) => p.id === id);
     if (!req) return;
     if (field === "status") req.fixStatus = normalizeText(target.value || "normal");
-    if (field === "checkin") req.newCheckIn = normalizeText(target.value || "");
-    if (field === "checkout") req.newCheckOut = normalizeText(target.value || "");
+    if (field === "checkin") req.newCheckIn = normalizeTimeText(target.value || "");
+    if (field === "checkout") req.newCheckOut = normalizeTimeText(target.value || "");
     if (field === "reason") req.reason = normalizeText(target.value || req.reason || "");
     persist();
   });
