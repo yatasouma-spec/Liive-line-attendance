@@ -2131,6 +2131,44 @@ function rejectCorrection(id) {
   renderAll();
 }
 
+function buildLogKey(log) {
+  return [
+    normalizeText(log?.dateISO || ""),
+    normalizeText(log?.employee || ""),
+    normalizeText(log?.site || ""),
+    normalizeText(log?.action || ""),
+    normalizeText(log?.source || ""),
+  ].join("|");
+}
+
+function mergeLogsPreferIncoming(incomingLogs) {
+  const map = new Map();
+  (state.logs || []).forEach((log) => {
+    map.set(buildLogKey(log), log);
+  });
+  (incomingLogs || []).forEach((log) => {
+    map.set(buildLogKey(log), log);
+  });
+  state.logs = Array.from(map.values())
+    .sort((a, b) => String(a.dateISO || "").localeCompare(String(b.dateISO || "")))
+    .slice(-2000);
+}
+
+function mergeTimecardsPreferIncoming(incomingRows) {
+  const map = new Map();
+  (state.timecards || []).forEach((row) => {
+    const key = row.sourceKey || sourceKey(row);
+    map.set(key, { ...row, sourceKey: key });
+  });
+  (incomingRows || []).forEach((row) => {
+    const key = row.sourceKey || sourceKey(row);
+    map.set(key, { ...row, sourceKey: key });
+  });
+  state.timecards = Array.from(map.values())
+    .sort((a, b) => `${a.date || ""}${a.checkIn || ""}`.localeCompare(`${b.date || ""}${b.checkIn || ""}`))
+    .slice(-20000);
+}
+
 function applySnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
   if (snapshot.attendancePolicy) {
@@ -2140,7 +2178,7 @@ function applySnapshot(snapshot) {
     state.alcoholLimit = normalizeAlcoholLimit(snapshot.alcoholLimit);
   }
   if (Array.isArray(snapshot.logs)) {
-    state.logs = snapshot.logs.map((log) => ({
+    const mappedLogs = snapshot.logs.map((log) => ({
       employee: log.employee || "-",
       site: log.site || "-",
       action: log.action || "-",
@@ -2149,9 +2187,21 @@ function applySnapshot(snapshot) {
       date: log.date || "-",
       dateISO: log.dateISO || `${log.date || ""}T${log.time || "00:00"}:00`,
     }));
+    // サーバー返却が一時的に空でも、既存ローカル履歴を消さない
+    if (mappedLogs.length === 0 && (state.logs || []).length > 0) {
+      // keep local
+    } else {
+      mergeLogsPreferIncoming(mappedLogs);
+    }
   }
   if (Array.isArray(snapshot.timecards)) {
-    state.timecards = applyApprovedCorrections(snapshot.timecards);
+    const incoming = applyApprovedCorrections(snapshot.timecards);
+    // サーバー返却が一時的に空でも、既存ローカル履歴を消さない
+    if (incoming.length === 0 && (state.timecards || []).length > 0) {
+      // keep local
+    } else {
+      mergeTimecardsPreferIncoming(incoming);
+    }
   }
   if (Array.isArray(snapshot.lineCorrectionRequests) && snapshot.lineCorrectionRequests.length) {
     const existingLineReqMap = new Map(

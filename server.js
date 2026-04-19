@@ -18,6 +18,9 @@ const SHIFT_AUTO_SEND_MINUTE = Number(process.env.SHIFT_AUTO_SEND_MINUTE || 0);
 const ATTENDANCE_CONFIRM_WINDOW_MIN = Number(process.env.ATTENDANCE_CONFIRM_WINDOW_MIN || 2);
 const DEFAULT_ALCOHOL_LIMIT = Number(process.env.ALCOHOL_LIMIT || 0);
 const EVIDENCE_RETENTION_DAYS = Number(process.env.EVIDENCE_RETENTION_DAYS || 730);
+const SNAPSHOT_LOG_LIMIT = Number(process.env.SNAPSHOT_LOG_LIMIT || 2000);
+const SNAPSHOT_TIMECARD_LIMIT = Number(process.env.SNAPSHOT_TIMECARD_LIMIT || 20000);
+const SNAPSHOT_CORRECTION_LIMIT = Number(process.env.SNAPSHOT_CORRECTION_LIMIT || 500);
 const DEFAULT_ATTENDANCE_POLICY = {
   mode: "payroll_exclude",
   globalBeforeMin: 10,
@@ -338,15 +341,7 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/bootstrap", (_req, res) => {
   const db = readDb();
-  res.json({
-    ok: true,
-    lineSync: db.lineSync,
-    logs: db.logs.slice(-200),
-    timecards: db.timecards.slice(-1000),
-    lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
-    attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
-    alcoholLimit: normalizeAlcoholLimit(db.alcoholLimit),
-  });
+  res.json(buildClientSnapshot(db, { includeCorrectionRequests: true }));
 });
 
 app.post("/api/settings/alcohol-limit", (req, res) => {
@@ -760,16 +755,7 @@ app.post("/api/timecards/overtime-review", (req, res) => {
   }
 
   writeDb(db);
-  res.json({
-    ok: true,
-    snapshot: {
-      lineSync: db.lineSync,
-      logs: db.logs.slice(-200),
-      timecards: db.timecards.slice(-1000),
-      lineCorrectionRequests: (db.lineCorrectionRequests || []).slice(-500),
-      attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
-    },
-  });
+  res.json({ ok: true, snapshot: buildClientSnapshot(db, { includeCorrectionRequests: true }) });
 });
 
 app.post("/api/compliance/check", (req, res) => {
@@ -1298,11 +1284,24 @@ function processLineAction({ employee, site, action, source, lineUserId = "", gp
   writeDb(db);
 
   return {
-    lineSync: db.lineSync,
-    logs: db.logs.slice(-200),
-    timecards: db.timecards.slice(-1000),
-    attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
+    ...buildClientSnapshot(db),
   };
+}
+
+function buildClientSnapshot(db, options = {}) {
+  const includeCorrectionRequests = options.includeCorrectionRequests === true;
+  const snapshot = {
+    ok: true,
+    lineSync: db.lineSync,
+    logs: (db.logs || []).slice(-SNAPSHOT_LOG_LIMIT),
+    timecards: (db.timecards || []).slice(-SNAPSHOT_TIMECARD_LIMIT),
+    attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
+    alcoholLimit: normalizeAlcoholLimit(db.alcoholLimit),
+  };
+  if (includeCorrectionRequests) {
+    snapshot.lineCorrectionRequests = (db.lineCorrectionRequests || []).slice(-SNAPSHOT_CORRECTION_LIMIT);
+  }
+  return snapshot;
 }
 
 function toJstParts(date) {
