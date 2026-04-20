@@ -75,13 +75,18 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       if (flow?.type === "checkin" && flow.stage === "need_location") {
         if (!isGeofenceConfigured(profile)) {
           writeDb(db);
-          await sendLineReply(event.replyToken, "この社員の拠点（GPS）が未設定です。管理画面のLINEユーザー紐付けで拠点を設定してください。");
+          await sendLineReply(event.replyToken, "この社員の拠点（GPS）が未設定です。管理画面のLINEユーザー紐付けで拠点を設定してください。", {
+            withQuickReply: true,
+          });
           continue;
         }
         const inside = isInsideGeofence(profile, { lat, lng });
         if (!inside) {
           writeDb(db);
-          await sendLineReply(event.replyToken, "登録現場の範囲外です。現場付近で再度位置情報を送信してください。");
+          await sendLineReply(event.replyToken, "登録現場の範囲外です。現場付近で再度、位置情報を送信してください。", {
+            withQuickReply: true,
+            quickReplyType: "location",
+          });
           continue;
         }
         db.alcoholEvidence = db.alcoholEvidence || [];
@@ -139,7 +144,10 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         flow.updatedAt = new Date().toISOString();
         db.lineWorkflows[userId] = flow;
         writeDb(db);
-        await sendLineReply(event.replyToken, "アルコール測定器の写真を確認しました。次に本人写真を送信してください。");
+        await sendLineReply(event.replyToken, "アルコール測定器の写真を確認しました。次に本人写真を送信してください。", {
+          withQuickReply: true,
+          quickReplyType: "photo_face",
+        });
         continue;
       }
       if (flow.stage === "need_face_photo") {
@@ -148,10 +156,15 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         flow.updatedAt = new Date().toISOString();
         db.lineWorkflows[userId] = flow;
         writeDb(db);
-        await sendLineReply(event.replyToken, "本人写真を確認しました。位置情報を送信してください（トーク画面の「＋」→位置情報）。");
+        await sendLineReply(event.replyToken, "本人写真を確認しました。次に位置情報を送信してください。", {
+          withQuickReply: true,
+          quickReplyType: "location",
+        });
         continue;
       }
-      await sendLineReply(event.replyToken, "画像は受信済みです。次の案内に沿って送信してください。");
+      await sendLineReply(event.replyToken, "画像は受信済みです。次の案内に沿って送信してください。", {
+        withQuickReply: true,
+      });
       continue;
     }
     if (event.message?.type !== "text") continue;
@@ -280,7 +293,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
           await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
         }
       } else {
-        const nextQuickReplyType = /飲酒値/.test(next.message) ? "alcohol" : "attendance";
+        const nextQuickReplyType = next.quickReplyType || (/飲酒値/.test(next.message) ? "alcohol" : "attendance");
         await sendLineReply(event.replyToken, next.message, {
           withQuickReply: next.withQuickReply,
           quickReplyType: nextQuickReplyType,
@@ -1071,7 +1084,8 @@ function advanceCheckinFlow(db, userId, text, profile) {
     db.lineWorkflows[userId] = flow;
     return {
       message: "飲酒値を確認しました。次に測定器の写真を送信してください。",
-      withQuickReply: false,
+      withQuickReply: true,
+      quickReplyType: "photo_meter",
       finalize: false,
     };
   }
@@ -1079,7 +1093,8 @@ function advanceCheckinFlow(db, userId, text, profile) {
   if (flow.stage === "need_meter_photo") {
     return {
       message: "測定器写真の送信待ちです。画像を送信してください。",
-      withQuickReply: false,
+      withQuickReply: true,
+      quickReplyType: "photo_meter",
       finalize: false,
     };
   }
@@ -1087,7 +1102,8 @@ function advanceCheckinFlow(db, userId, text, profile) {
   if (flow.stage === "need_face_photo") {
     return {
       message: "本人写真の送信待ちです。画像を送信してください。",
-      withQuickReply: false,
+      withQuickReply: true,
+      quickReplyType: "photo_face",
       finalize: false,
     };
   }
@@ -1103,15 +1119,17 @@ function advanceCheckinFlow(db, userId, text, profile) {
     const gps = getLatestLocation(db, userId);
     if (!gps) {
       return {
-        message: "位置情報の送信待ちです。トークの「＋」から位置情報を送信してください。",
-        withQuickReply: false,
+        message: "位置情報の送信待ちです。下の「位置情報を送る」を押してください。",
+        withQuickReply: true,
+        quickReplyType: "location",
         finalize: false,
       };
     }
     if (!isInsideGeofence(profile, gps)) {
       return {
-        message: "登録現場の範囲外です。現場付近で再度位置情報を送信してください。",
-        withQuickReply: false,
+        message: "登録現場の範囲外です。現場付近で再度、位置情報を送信してください。",
+        withQuickReply: true,
+        quickReplyType: "location",
         finalize: false,
       };
     }
@@ -1416,6 +1434,37 @@ function getAlcoholQuickReplyItems() {
   ];
 }
 
+function getPhotoQuickReplyItems(kind = "meter") {
+  const title = kind === "face" ? "本人写真" : "測定器写真";
+  return [
+    {
+      type: "action",
+      action: { type: "camera", label: `${title}を撮影` },
+    },
+    {
+      type: "action",
+      action: { type: "cameraRoll", label: "アルバムから送信" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "メニュー", text: "メニュー" },
+    },
+  ];
+}
+
+function getLocationQuickReplyItems() {
+  return [
+    {
+      type: "action",
+      action: { type: "location", label: "位置情報を送る" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "メニュー", text: "メニュー" },
+    },
+  ];
+}
+
 async function sendLineReply(replyToken, text, options = {}) {
   if (!LINE_CHANNEL_ACCESS_TOKEN || !replyToken) return;
   const message = { type: "text", text };
@@ -1424,6 +1473,9 @@ async function sendLineReply(replyToken, text, options = {}) {
     let items = getAttendanceQuickReplyItems();
     if (type === "alcohol") items = getAlcoholQuickReplyItems();
     if (type === "confirm") items = getConfirmQuickReplyItems(options.confirmAction || "checkin");
+    if (type === "photo_meter") items = getPhotoQuickReplyItems("meter");
+    if (type === "photo_face") items = getPhotoQuickReplyItems("face");
+    if (type === "location") items = getLocationQuickReplyItems();
     message.quickReply = {
       items,
     };
