@@ -1443,10 +1443,6 @@ function getPhotoQuickReplyItems(kind = "meter") {
     },
     {
       type: "action",
-      action: { type: "cameraRoll", label: "アルバムから送信" },
-    },
-    {
-      type: "action",
       action: { type: "message", label: "メニュー", text: "メニュー" },
     },
   ];
