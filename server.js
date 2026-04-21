@@ -11,6 +11,24 @@ const DB_FILE = path.join(DATA_DIR, "line-attendance.json");
 
 const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
+const LINE_CHANNEL_SECRET_2 = process.env.LINE_CHANNEL_SECRET_2 || "";
+const LINE_CHANNEL_ACCESS_TOKEN_2 = process.env.LINE_CHANNEL_ACCESS_TOKEN_2 || "";
+const LINE_CHANNEL_PRIMARY_NAME = process.env.LINE_CHANNEL_PRIMARY_NAME || "標準LINE";
+const LINE_CHANNEL_SECONDARY_NAME = process.env.LINE_CHANNEL_SECONDARY_NAME || "飲酒チェックLINE";
+const LINE_CHANNELS = [
+  {
+    id: "primary",
+    label: LINE_CHANNEL_PRIMARY_NAME,
+    secret: LINE_CHANNEL_SECRET,
+    accessToken: LINE_CHANNEL_ACCESS_TOKEN,
+  },
+  {
+    id: "secondary",
+    label: LINE_CHANNEL_SECONDARY_NAME,
+    secret: LINE_CHANNEL_SECRET_2,
+    accessToken: LINE_CHANNEL_ACCESS_TOKEN_2,
+  },
+];
 const LINE_USER_MAP = safeJsonParse(process.env.LINE_USER_MAP_JSON, {});
 const APP_TIMEZONE = "Asia/Tokyo";
 const SHIFT_AUTO_SEND_HOUR = Number(process.env.SHIFT_AUTO_SEND_HOUR || 18);
@@ -30,27 +48,26 @@ const DEFAULT_ATTENDANCE_POLICY = {
 ensureDataFile();
 
 app.post("/line/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  const signature = req.get("x-line-signature") || "";
   const body = req.body;
-  if (!verifyLineSignature(body, signature)) {
+  const signature = req.get("x-line-signature") || "";
+  const inboundChannelId = resolveLineChannelFromSignature(body, signature);
+  if (!inboundChannelId) {
     return res.status(401).json({ ok: false, error: "invalid signature" });
   }
 
   const payload = safeJsonParse(body.toString("utf8"), { events: [] });
   for (const event of payload.events || []) {
+    const replyToEvent = (messageText, options = {}) =>
+      sendLineReply(event.replyToken, messageText, { ...options, channel: inboundChannelId });
     const userId = event.source?.userId || "unknown";
     const text = (event.message?.text || "").trim();
     const dbForUser = readDb();
-    registerSeenLineUser(dbForUser, userId, text);
+    registerSeenLineUser(dbForUser, userId, text, inboundChannelId);
     writeDb(dbForUser);
 
     if (event.type === "follow") {
       console.log(`[LINE][follow] userId=${userId}`);
-      await sendLineReply(
-        event.replyToken,
-        "友だち追加ありがとうございます。下のボタンから勤怠打刻してください。",
-        { withQuickReply: true }
-      );
+      await replyToEvent("友だち追加ありがとうございます。下のボタンから勤怠打刻してください。", { withQuickReply: true });
       continue;
     }
     if (event.type !== "message") continue;
@@ -75,7 +92,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       if (flow?.type === "checkin" && flow.stage === "need_location") {
         if (!isGeofenceConfigured(profile)) {
           writeDb(db);
-          await sendLineReply(event.replyToken, "この社員の拠点（GPS）が未設定です。管理画面のLINEユーザー紐付けで拠点を設定してください。", {
+          await replyToEvent("この社員の拠点（GPS）が未設定です。管理画面のLINEユーザー紐付けで拠点を設定してください。", {
             withQuickReply: true,
           });
           continue;
@@ -83,7 +100,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         const inside = isInsideGeofence(profile, { lat, lng });
         if (!inside) {
           writeDb(db);
-          await sendLineReply(event.replyToken, "登録現場の範囲外です。現場付近で再度、位置情報を送信してください。", {
+          await replyToEvent("登録現場の範囲外です。現場付近で再度、位置情報を送信してください。", {
             withQuickReply: true,
             quickReplyType: "location",
           });
@@ -120,20 +137,20 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
             },
           });
           const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
-          await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+          await replyToEvent(msg, { withQuickReply: true });
         } catch (error) {
-          await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+          await replyToEvent(String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
         }
         continue;
       }
       writeDb(db);
-      await sendLineReply(event.replyToken, `位置情報を受け付けました（${employee}）`, { withQuickReply: true });
+      await replyToEvent(`位置情報を受け付けました（${employee}）`, { withQuickReply: true });
       continue;
     }
     if (event.message?.type === "image") {
       const flow = db.lineWorkflows?.[userId];
       if (!flow || flow.type !== "checkin") {
-        await sendLineReply(event.replyToken, "画像を受け付けました。必要時に案内に従って送信してください。", {
+        await replyToEvent("画像を受け付けました。必要時に案内に従って送信してください。", {
           withQuickReply: true,
         });
         continue;
@@ -144,7 +161,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         flow.updatedAt = new Date().toISOString();
         db.lineWorkflows[userId] = flow;
         writeDb(db);
-        await sendLineReply(event.replyToken, "アルコール測定器の写真を確認しました。次に本人写真を送信してください。", {
+        await replyToEvent("アルコール測定器の写真を確認しました。次に本人写真を送信してください。", {
           withQuickReply: true,
           quickReplyType: "photo_face",
         });
@@ -156,13 +173,13 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         flow.updatedAt = new Date().toISOString();
         db.lineWorkflows[userId] = flow;
         writeDb(db);
-        await sendLineReply(event.replyToken, "本人写真を確認しました。次に位置情報を送信してください。", {
+        await replyToEvent("本人写真を確認しました。次に位置情報を送信してください。", {
           withQuickReply: true,
           quickReplyType: "location",
         });
         continue;
       }
-      await sendLineReply(event.replyToken, "画像は受信済みです。次の案内に沿って送信してください。", {
+      await replyToEvent("画像は受信済みです。次の案内に沿って送信してください。", {
         withQuickReply: true,
       });
       continue;
@@ -172,28 +189,28 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     console.log(`[LINE][message] userId=${userId} mapped=${mapped} employee=${employee} text=${text}`);
 
     if (text === "メニュー" || text === "menu") {
-      await sendLineReply(event.replyToken, "勤怠メニューです。ボタンを押してください。", { withQuickReply: true });
+      await replyToEvent("勤怠メニューです。ボタンを押してください。", { withQuickReply: true });
       continue;
     }
     if (text.includes("明日シフト確認") || text.includes("シフト確認")) {
       const startDate = getJstDateOffset(1);
       const endDate = getJstDateOffset(7);
       const message = buildShiftMessageForEmployeeRange(db, startDate, endDate, employee);
-      await sendLineReply(event.replyToken, message, { withQuickReply: true });
+      await replyToEvent(message, { withQuickReply: true });
       continue;
     }
     if (text.includes("今週シフト")) {
       const startDate = getJstDateOffset(1);
       const endDate = getJstDateOffset(7);
       const message = buildShiftMessageForEmployeeRange(db, startDate, endDate, employee);
-      await sendLineReply(event.replyToken, message, { withQuickReply: true });
+      await replyToEvent(message, { withQuickReply: true });
       continue;
     }
     if (text.includes("今月シフト")) {
       const startDate = getJstDateOffset(1);
       const endDate = getJstDateOffset(30);
       const message = buildShiftMessageForEmployeeRange(db, startDate, endDate, employee);
-      await sendLineReply(event.replyToken, message, { withQuickReply: true });
+      await replyToEvent(message, { withQuickReply: true });
       continue;
     }
 
@@ -210,7 +227,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       });
       db.lineCorrectionRequests = db.lineCorrectionRequests.slice(-1000);
       writeDb(db);
-      await sendLineReply(event.replyToken, "修正依頼を受け付けました。管理者が承認後に反映します。");
+      await replyToEvent("修正依頼を受け付けました。管理者が承認後に反映します。");
       continue;
     }
 
@@ -219,7 +236,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       if (text === "キャンセル") {
         clearPendingConfirm(db, userId);
         writeDb(db);
-        await sendLineReply(event.replyToken, "確認をキャンセルしました。", { withQuickReply: true });
+        await replyToEvent("確認をキャンセルしました。", { withQuickReply: true });
         continue;
       }
       const expected = `${actionLabel(pendingConfirm.action)}確定`;
@@ -228,11 +245,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         if (pendingConfirm.action === "checkin") {
           startCheckinFlow(db, userId, pendingConfirm.employee, pendingConfirm.site);
           writeDb(db);
-          await sendLineReply(
-            event.replyToken,
-            `出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`,
-            { withQuickReply: true, quickReplyType: "alcohol" }
-          );
+          await replyToEvent(`出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`, { withQuickReply: true, quickReplyType: "alcohol" });
           continue;
         }
         writeDb(db);
@@ -245,13 +258,13 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
             lineUserId: userId,
           });
           const msg = `受け付けました: ${pendingConfirm.employee} / ${pendingConfirm.site} / ${actionLabel(pendingConfirm.action)} (${snapshot.lineSync?.time || "-"})`;
-          await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+          await replyToEvent(msg, { withQuickReply: true });
         } catch (error) {
-          await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+          await replyToEvent(String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
         }
         continue;
       }
-      await sendLineReply(event.replyToken, `確認中です。「${expected}」を押してください。`, {
+      await replyToEvent(`確認中です。「${expected}」を押してください。`, {
         withQuickReply: true,
         quickReplyType: "confirm",
         confirmAction: pendingConfirm.action,
@@ -262,11 +275,7 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     const flow = db.lineWorkflows?.[userId];
     if (flow?.type === "checkin") {
       if (flow.stage === "need_alcohol" && text === "ALC その他") {
-        await sendLineReply(
-          event.replyToken,
-          "飲酒値を手入力してください（例: 0.03 または ALC 0.03）。",
-          { withQuickReply: true, quickReplyType: "alcohol" }
-        );
+        await replyToEvent("飲酒値を手入力してください（例: 0.03 または ALC 0.03）。", { withQuickReply: true, quickReplyType: "alcohol" });
         continue;
       }
       const next = advanceCheckinFlow(db, userId, text, profile);
@@ -288,13 +297,13 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
             },
           });
           const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
-          await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+          await replyToEvent(msg, { withQuickReply: true });
         } catch (error) {
-          await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+          await replyToEvent(String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
         }
       } else {
         const nextQuickReplyType = next.quickReplyType || (/飲酒値/.test(next.message) ? "alcohol" : "attendance");
-        await sendLineReply(event.replyToken, next.message, {
+        await replyToEvent(next.message, {
           withQuickReply: next.withQuickReply,
           quickReplyType: nextQuickReplyType,
         });
@@ -304,18 +313,14 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
 
     const action = detectAction(text);
     if (!action) {
-      await sendLineReply(
-        event.replyToken,
-        "認識できませんでした。下のボタンから打刻してください。",
-        { withQuickReply: true }
-      );
+      await replyToEvent("認識できませんでした。下のボタンから打刻してください。", { withQuickReply: true });
       continue;
     }
 
     if ((action === "checkin" || action === "checkout") && needsConfirmAction(action)) {
       setPendingConfirm(db, userId, { action, employee, site });
       writeDb(db);
-      await sendLineReply(event.replyToken, `「${actionLabel(action)}」でよければ「${actionLabel(action)}確定」を押してください。`, {
+      await replyToEvent(`「${actionLabel(action)}」でよければ「${actionLabel(action)}確定」を押してください。`, {
         withQuickReply: true,
         quickReplyType: "confirm",
         confirmAction: action,
@@ -326,20 +331,16 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     if (action === "checkin") {
       startCheckinFlow(db, userId, employee, site);
       writeDb(db);
-      await sendLineReply(
-        event.replyToken,
-        `出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`,
-        { withQuickReply: true, quickReplyType: "alcohol" }
-      );
+      await replyToEvent(`出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`, { withQuickReply: true, quickReplyType: "alcohol" });
       continue;
     }
 
     try {
       const snapshot = processLineAction({ employee, site, action, source: "LINE", lineUserId: userId });
       const msg = `受け付けました: ${employee} / ${site} / ${actionLabel(action)} (${snapshot.lineSync?.time || "-"})`;
-      await sendLineReply(event.replyToken, msg, { withQuickReply: true });
+      await replyToEvent(msg, { withQuickReply: true });
     } catch (error) {
-      await sendLineReply(event.replyToken, String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+      await replyToEvent(String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
     }
   }
 
@@ -522,9 +523,19 @@ app.get("/api/line/users", (_req, res) => {
     endGeoRadiusM: mergedUserMap[userId]?.endGeoRadiusM ?? 300,
     endGeoPlaceName: mergedUserMap[userId]?.endGeoPlaceName || "",
     endGeoMapUrl: mergedUserMap[userId]?.endGeoMapUrl || "",
+    lineChannel: normalizeLineChannel(mergedUserMap[userId]?.lineChannel || seen[userId]?.lineChannel || "primary"),
+    siteLinkId: String(mergedUserMap[userId]?.siteLinkId || ""),
   }));
   users.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
-  res.json({ ok: true, users });
+  res.json({
+    ok: true,
+    users,
+    channels: LINE_CHANNELS.map((ch) => ({
+      id: ch.id,
+      label: ch.label,
+      configured: !!(ch.secret && ch.accessToken),
+    })),
+  });
 });
 
 app.post("/api/line/users/map", (req, res) => {
@@ -548,6 +559,8 @@ app.post("/api/line/users/map", (req, res) => {
     endGeoRadiusM,
     endGeoPlaceName,
     endGeoMapUrl,
+    lineChannel,
+    siteLinkId,
   } = req.body || {};
   if (!userId || !employeeName || !site) {
     return res.status(400).json({ ok: false, error: "userId/employeeName/site are required" });
@@ -585,9 +598,11 @@ app.post("/api/line/users/map", (req, res) => {
     endGeoRadiusM: Number.isFinite(Number(endGeoRadiusM)) && Number(endGeoRadiusM) > 0 ? Number(endGeoRadiusM) : 300,
     endGeoPlaceName: String(endGeoPlaceName || ""),
     endGeoMapUrl: String(endGeoMapUrl || ""),
+    lineChannel: normalizeLineChannel(lineChannel || "primary"),
+    siteLinkId: String(siteLinkId || ""),
   };
   backfillPlaceholderEmployee(db, userId, employeeName);
-  registerSeenLineUser(db, userId, "");
+  registerSeenLineUser(db, userId, "", lineChannel || "primary");
   writeDb(db);
   console.log(`[LINE][map] userId=${userId} -> employee=${employeeName} site=${site}`);
   res.json({ ok: true });
@@ -1368,26 +1383,49 @@ function toJstParts(date) {
   };
 }
 
-function registerSeenLineUser(db, userId, text) {
+function registerSeenLineUser(db, userId, text, lineChannel = "") {
   if (!db || !userId || userId === "unknown") return;
   db.lineUsersSeen = db.lineUsersSeen || {};
+  const previous = db.lineUsersSeen[userId] || {};
+  const resolvedChannel = normalizeLineChannel(lineChannel || previous.lineChannel || "primary");
   db.lineUsersSeen[userId] = {
     lastSeenAt: new Date().toISOString(),
-    lastText: text || db.lineUsersSeen[userId]?.lastText || "",
+    lastText: text || previous.lastText || "",
+    lineChannel: resolvedChannel,
   };
 }
 
-function verifyLineSignature(rawBody, signature) {
-  if (!LINE_CHANNEL_SECRET) return true;
+function verifyLineSignature(rawBody, signature, secret = LINE_CHANNEL_SECRET) {
+  if (!secret) return true;
   if (!signature) return false;
   const digest = crypto
-    .createHmac("sha256", LINE_CHANNEL_SECRET)
+    .createHmac("sha256", secret)
     .update(rawBody)
     .digest("base64");
   const expected = Buffer.from(digest);
   const provided = Buffer.from(signature);
   if (expected.length !== provided.length) return false;
   return crypto.timingSafeEqual(expected, provided);
+}
+
+function resolveLineChannelFromSignature(rawBody, signature) {
+  const configured = LINE_CHANNELS.filter((ch) => String(ch.secret || "").trim());
+  if (!configured.length) return "primary";
+  if (!signature) return "";
+  const matched = configured.find((ch) => verifyLineSignature(rawBody, signature, ch.secret));
+  return matched?.id || "";
+}
+
+function normalizeLineChannel(channel) {
+  return String(channel || "").trim().toLowerCase() === "secondary" ? "secondary" : "primary";
+}
+
+function getLineChannelConfig(channel) {
+  const wanted = normalizeLineChannel(channel);
+  const exact = LINE_CHANNELS.find((ch) => ch.id === wanted);
+  if (exact?.accessToken) return exact;
+  const fallback = LINE_CHANNELS.find((ch) => ch.accessToken);
+  return fallback || exact || LINE_CHANNELS[0] || { id: "primary", label: "LINE", secret: "", accessToken: "" };
 }
 
 function getAttendanceQuickReplyItems() {
@@ -1402,7 +1440,7 @@ function getAttendanceQuickReplyItems() {
     },
     {
       type: "action",
-      action: { type: "message", label: "明日シフト", text: "明日シフト確認" },
+      action: { type: "message", label: "シフト確認", text: "シフト確認" },
     },
     {
       type: "action",
@@ -1424,7 +1462,7 @@ function getConfirmQuickReplyItems(action) {
     },
     {
       type: "action",
-      action: { type: "message", label: "明日シフト", text: "明日シフト確認" },
+      action: { type: "message", label: "シフト確認", text: "シフト確認" },
     },
     {
       type: "action",
@@ -1486,7 +1524,9 @@ function getLocationQuickReplyItems() {
 }
 
 async function sendLineReply(replyToken, text, options = {}) {
-  if (!LINE_CHANNEL_ACCESS_TOKEN || !replyToken) return;
+  const channelConfig = getLineChannelConfig(options.channel);
+  const accessToken = String(channelConfig?.accessToken || "");
+  if (!accessToken || !replyToken) return;
   const message = { type: "text", text };
   if (options.withQuickReply) {
     const type = options.quickReplyType || "attendance";
@@ -1505,7 +1545,7 @@ async function sendLineReply(replyToken, text, options = {}) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         replyToken,
@@ -1515,14 +1555,16 @@ async function sendLineReply(replyToken, text, options = {}) {
   } catch (_e) {}
 }
 
-async function sendLinePush(to, text) {
-  if (!LINE_CHANNEL_ACCESS_TOKEN || !to) return false;
+async function sendLinePush(to, text, options = {}) {
+  const channelConfig = getLineChannelConfig(options.channel);
+  const accessToken = String(channelConfig?.accessToken || "");
+  if (!accessToken || !to) return false;
   try {
     await fetch("https://api.line.me/v2/bot/message/push", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         to,
@@ -1650,7 +1692,8 @@ async function deliverShiftByDate(targetDate, mode = "manual") {
     }
     const message = buildShiftMessageForEmployee(db, date, employeeName);
 
-    const ok = await sendLinePush(userId, message);
+    const lineChannel = normalizeLineChannel(profile?.lineChannel || "primary");
+    const ok = await sendLinePush(userId, message, { channel: lineChannel });
     if (ok) sentCount += 1;
     else skippedCount += 1;
   }
@@ -1715,7 +1758,8 @@ async function deliverShiftToEmployee(targetDate, employeeName) {
     };
   }
   const message = buildShiftMessageForEmployee(db, date, employeeName);
-  const ok = await sendLinePush(targetUserId, message);
+  const targetProfile = userMap[targetUserId] || {};
+  const ok = await sendLinePush(targetUserId, message, { channel: normalizeLineChannel(targetProfile?.lineChannel || "primary") });
   db.shiftDelivery = {
     lastSentAt: new Date().toISOString(),
     lastSentDateJst: getJstDateOffset(0),
@@ -1789,7 +1833,8 @@ async function deliverShiftRange(targetStartDate, targetEndDate, mode = "manual"
       continue;
     }
     const message = buildShiftMessageForEmployeeRange(db, effectiveStartDate, effectiveEndDate, employeeName);
-    const ok = await sendLinePush(userId, message);
+    const lineChannel = normalizeLineChannel(profile?.lineChannel || "primary");
+    const ok = await sendLinePush(userId, message, { channel: lineChannel });
     if (ok) sentCount += 1;
     else skippedCount += 1;
   }
@@ -1881,7 +1926,8 @@ async function deliverShiftRangeToEmployee(targetStartDate, targetEndDate, emplo
     };
   }
   const message = buildShiftMessageForEmployeeRange(db, effectiveStartDate, effectiveEndDate, employeeName);
-  const ok = await sendLinePush(targetUserId, message);
+  const targetProfile = userMap[targetUserId] || {};
+  const ok = await sendLinePush(targetUserId, message, { channel: normalizeLineChannel(targetProfile?.lineChannel || "primary") });
   db.shiftDelivery = {
     lastSentAt: new Date().toISOString(),
     lastSentDateJst: getJstDateOffset(0),

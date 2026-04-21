@@ -68,6 +68,7 @@ const state = {
   employeeSearch: "",
   currentGps: null,
   lineUsers: [],
+  lineChannels: [],
   editingShiftId: "",
   theme: loadJson(THEME_KEY, "blue"),
   attendancePolicy: loadJson(ATTENDANCE_POLICY_KEY, defaultAttendancePolicy),
@@ -544,9 +545,12 @@ function ensureRouteExists(siteName) {
 
 function updateLineMapProgress() {
   const employeeId = normalizeText(document.getElementById("lineMapEmployee")?.value || "");
+  const channelId = normalizeText(document.getElementById("lineMapChannel")?.value || "primary");
   const siteEl = document.getElementById("lineMapAutoSitePreview");
   const startEl = document.getElementById("lineMapAutoStartPreview");
   const endEl = document.getElementById("lineMapAutoEndPreview");
+  const channelEl = document.getElementById("lineMapChannelPreview");
+  if (channelEl) channelEl.textContent = lineChannelLabel(channelId);
 
   if (!employeeId) {
     if (siteEl) siteEl.textContent = "未設定";
@@ -761,6 +765,14 @@ function lineMappingStatusBadge(row) {
   if (!hasStart) return '<span class="badge warn">位置未設定</span>';
   if (!hasEnd) return '<span class="badge warn">退勤地点未設定</span>';
   return '<span class="badge ok">開始/退勤 設定済み</span>';
+}
+
+function lineChannelLabel(channelId) {
+  const id = normalizeText(channelId || "primary") || "primary";
+  const row = (state.lineChannels || []).find((ch) => normalizeText(ch?.id || "") === id);
+  if (row?.label) return row.label;
+  if (id === "secondary") return "飲酒チェックLINE";
+  return "標準LINE";
 }
 
 function employeeBufferLabel(employeeRow) {
@@ -1053,6 +1065,28 @@ function populateSelectors() {
     const prev = lineMapEmployee.value;
     lineMapEmployee.innerHTML = employeeIdOptions;
     if (prev && [...lineMapEmployee.options].some((o) => o.value === prev)) lineMapEmployee.value = prev;
+  }
+
+  const lineMapChannel = document.getElementById("lineMapChannel");
+  if (lineMapChannel) {
+    const prev = normalizeText(lineMapChannel.value || "primary");
+    const options =
+      (state.lineChannels || [])
+        .map((ch) => {
+          const id = normalizeText(ch?.id || "");
+          if (!id) return "";
+          const label = normalizeText(ch?.label || "") || (id === "secondary" ? "飲酒チェックLINE" : "標準LINE");
+          const suffix = ch?.configured === false ? "（未設定）" : "";
+          return `<option value="${id}">${label}${suffix}</option>`;
+        })
+        .filter(Boolean)
+        .join("") || '<option value="primary">標準LINE</option><option value="secondary">飲酒チェックLINE</option>';
+    lineMapChannel.innerHTML = options;
+    if (prev && [...lineMapChannel.options].some((o) => normalizeText(o.value) === prev)) {
+      lineMapChannel.value = prev;
+    } else if ([...lineMapChannel.options].some((o) => normalizeText(o.value) === "primary")) {
+      lineMapChannel.value = "primary";
+    }
   }
 
   const linkEmployee = document.getElementById("linkEmployeeId");
@@ -1672,21 +1706,23 @@ function renderMasters() {
           .map((u) => {
             const fallbackEmployee = state.employees.find((e) => normalizeText(e.name) === normalizeText(u.employee || ""));
             const employeeId = normalizeText(u.employeeId || fallbackEmployee?.id || "");
+            const channelId = normalizeText(u.lineChannel || "primary") || "primary";
             return `<tr>
       <td>${u.userId}</td>
+      <td>${lineChannelLabel(channelId)}</td>
       <td>${u.employee || "-"}</td>
       <td>${displaySiteLabel(u.site)}</td>
       <td>${formatStartGeoCell(u)}</td>
       <td>${formatEndGeoCell(u)}</td>
       <td>${lineMappingStatusBadge(u)}</td>
       <td>
-        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${employeeId}">このIDを入力</button>
+        <button class="btn btn-ghost" data-fill-line-user="${u.userId}" data-fill-emp-id="${employeeId}" data-fill-line-channel="${channelId}">このIDを入力</button>
         <button class="btn btn-ghost" data-unmap-line-user="${u.userId}">紐付け解除</button>
       </td>
     </tr>`;
           })
           .join("")
-      : '<tr><td class="empty" colspan="7">まだLINE送信履歴がありません</td></tr>';
+      : '<tr><td class="empty" colspan="8">まだLINE送信履歴がありません</td></tr>';
   }
 }
 
@@ -2479,12 +2515,13 @@ async function fetchLineUsers() {
     const data = await apiRequest("/api/line/users");
     if (!data?.ok) return;
     state.lineUsers = Array.isArray(data.users) ? data.users : [];
+    state.lineChannels = Array.isArray(data.channels) ? data.channels : [];
     reconcileLineDisplayNames();
     renderAllUnlessCorrectionEditing();
   } catch (_e) {}
 }
 
-async function saveLineUserMapping(userId, employeeId, employeeName, site, geo = {}) {
+async function saveLineUserMapping(userId, employeeId, employeeName, site, lineChannel, siteLinkId, geo = {}) {
   if (!API_ENABLED) {
     alert("http/https環境で実行してください（file://は不可）");
     return;
@@ -2512,6 +2549,8 @@ async function saveLineUserMapping(userId, employeeId, employeeName, site, geo =
           endGeoRadiusM: geo.endGeoRadiusM,
           endGeoPlaceName: geo.endGeoPlaceName || "",
           endGeoMapUrl: geo.endGeoMapUrl || "",
+          lineChannel: normalizeText(lineChannel || "primary") || "primary",
+          siteLinkId: normalizeText(siteLinkId || ""),
         }),
       });
     if (!data?.ok) throw new Error("save failed");
@@ -3279,6 +3318,7 @@ function bindMasterEvents() {
     e.preventDefault();
     const userId = document.getElementById("lineUserIdInput")?.value.trim();
     const employeeId = document.getElementById("lineMapEmployee")?.value;
+    const lineChannel = normalizeText(document.getElementById("lineMapChannel")?.value || "primary") || "primary";
     const employee = getEmployeeById(employeeId);
     if (!userId || !employeeId || !employee) return;
 
@@ -3308,7 +3348,7 @@ function bindMasterEvents() {
     const startRadius = Number.isFinite(Number(startSite.geoRadiusM)) && Number(startSite.geoRadiusM) > 0 ? Number(startSite.geoRadiusM) : 300;
     const endRadius = Number.isFinite(Number(endSite.geoRadiusM)) && Number(endSite.geoRadiusM) > 0 ? Number(endSite.geoRadiusM) : 300;
 
-    await saveLineUserMapping(userId, employeeId, employee.name, site, {
+    await saveLineUserMapping(userId, employeeId, employee.name, site, lineChannel, link.id, {
       geoLat: Number(startSite.geoLat),
       geoLng: Number(startSite.geoLng),
       geoRadiusM: startRadius,
@@ -3344,6 +3384,11 @@ function bindMasterEvents() {
     const empSelect = document.getElementById("lineMapEmployee");
     const empId = target.getAttribute("data-fill-emp-id");
     if (empSelect && empId) empSelect.value = empId;
+    const channelSelect = document.getElementById("lineMapChannel");
+    const channelId = normalizeText(target.getAttribute("data-fill-line-channel") || "");
+    if (channelSelect && channelId && [...channelSelect.options].some((o) => normalizeText(o.value) === channelId)) {
+      channelSelect.value = channelId;
+    }
     updateLineMapProgress();
     markLineMapSaveStatus("warn", "編集中（保存してください）");
   });
@@ -3522,7 +3567,7 @@ function bindEvents() {
     await fillGeoFromMapUrl("endSite");
   });
   document.getElementById("endSiteUseCurrentGpsBtn")?.addEventListener("click", () => fillGeoFromCurrentGps("endSite"));
-  ["lineUserIdInput", "lineMapEmployee"].forEach((id) => {
+  ["lineUserIdInput", "lineMapEmployee", "lineMapChannel"].forEach((id) => {
     document.getElementById(id)?.addEventListener("input", () => {
       updateLineMapProgress();
       markLineMapSaveStatus("neutral", "未保存");

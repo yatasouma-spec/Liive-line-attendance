@@ -590,9 +590,14 @@
                 <h3>1. 社員情報</h3>
                 <input id="lineUserIdInput" type="text" placeholder="LINE userId (Uから始まる文字列)" required />
                 <select id="lineMapEmployee" required></select>
+                <select id="lineMapChannel">
+                  <option value="primary">標準LINE</option>
+                  <option value="secondary">飲酒チェックLINE</option>
+                </select>
                 <p class="line-map-help">担当現場: <strong id="lineMapAutoSitePreview">未設定</strong></p>
                 <p class="line-map-help">出勤地点: <strong id="lineMapAutoStartPreview">未設定</strong></p>
                 <p class="line-map-help">退勤地点: <strong id="lineMapAutoEndPreview">未設定</strong></p>
+                <p class="line-map-help">利用LINEチャネル: <strong id="lineMapChannelPreview">標準LINE</strong></p>
                 <p id="lineMapLinkStatus" class="line-map-status neutral">社員と地点の紐付け待ち</p>
                 <p id="lineMapSaveStatus" class="line-map-status neutral">未保存</p>
               </section>
@@ -606,11 +611,12 @@
                 <thead>
                   <tr>
                     <th>LINE userId</th>
+                    <th>LINEチャネル</th>
                     <th>紐付け社員</th>
-                      <th>担当現場</th>
-                      <th>開始地点</th>
-                      <th>退勤地点</th>
-                      <th>設定状態</th>
+                    <th>担当現場</th>
+                    <th>開始地点</th>
+                    <th>退勤地点</th>
+                    <th>設定状態</th>
                     <th>操作</th>
                   </tr>
                 </thead>
