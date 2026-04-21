@@ -1384,7 +1384,10 @@ function verifyLineSignature(rawBody, signature) {
     .createHmac("sha256", LINE_CHANNEL_SECRET)
     .update(rawBody)
     .digest("base64");
-  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
+  const expected = Buffer.from(digest);
+  const provided = Buffer.from(signature);
+  if (expected.length !== provided.length) return false;
+  return crypto.timingSafeEqual(expected, provided);
 }
 
 function getAttendanceQuickReplyItems() {
