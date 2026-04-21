@@ -219,8 +219,34 @@ function normalizeAttendancePolicy(raw) {
   };
 }
 
+function parseDecimalValue(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  let text = String(value ?? "").trim();
+  if (!text) return null;
+  text = text
+    .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/．/g, ".")
+    .replace(/，/g, ",")
+    .replace(/[−ー―–]/g, "-")
+    .replace(/[^\d,.\-]/g, "");
+  if (!text) return null;
+
+  let candidate = text;
+  if (candidate.includes(",") && candidate.includes(".")) {
+    candidate = candidate.replace(/,/g, "");
+  } else if (candidate.includes(",") && !candidate.includes(".")) {
+    candidate = candidate.replace(",", ".");
+  }
+  const sign = candidate.startsWith("-") ? "-" : "";
+  candidate = candidate.replace(/-/g, "");
+  const parts = candidate.split(".");
+  const merged = `${sign}${parts.shift() || "0"}${parts.length ? `.${parts.join("")}` : ""}`;
+  const num = Number(merged);
+  return Number.isFinite(num) ? num : null;
+}
+
 function normalizeAlcoholLimit(value) {
-  const num = Number(value);
+  const num = parseDecimalValue(value);
   if (!Number.isFinite(num)) return 0;
   return Math.min(1, Math.max(0, Number(num.toFixed(2))));
 }
@@ -2784,7 +2810,13 @@ function bindMasterEvents() {
 
   document.getElementById("alcoholPolicyForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    const next = normalizeAlcoholLimit(document.getElementById("alcoholLimitInput")?.value || 0);
+    const raw = document.getElementById("alcoholLimitInput")?.value || "";
+    const parsed = parseDecimalValue(raw);
+    if (parsed === null) {
+      alert("飲酒基準値は 0.00 〜 1.00 の数値で入力してください。");
+      return;
+    }
+    const next = normalizeAlcoholLimit(parsed);
     state.alcoholLimit = next;
     renderAll();
     saveAlcoholLimitToServer();

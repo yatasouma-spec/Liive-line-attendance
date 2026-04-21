@@ -984,13 +984,34 @@ function startCheckinFlow(db, userId, employee, site) {
   };
 }
 
+function parseDecimalValue(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  let text = String(value ?? "").trim();
+  if (!text) return null;
+  text = text
+    .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/．/g, ".")
+    .replace(/，/g, ",")
+    .replace(/[−ー―–]/g, "-")
+    .replace(/[^\d,.\-]/g, "");
+  if (!text) return null;
+
+  let candidate = text;
+  if (candidate.includes(",") && candidate.includes(".")) {
+    candidate = candidate.replace(/,/g, "");
+  } else if (candidate.includes(",") && !candidate.includes(".")) {
+    candidate = candidate.replace(",", ".");
+  }
+  const sign = candidate.startsWith("-") ? "-" : "";
+  candidate = candidate.replace(/-/g, "");
+  const parts = candidate.split(".");
+  const merged = `${sign}${parts.shift() || "0"}${parts.length ? `.${parts.join("")}` : ""}`;
+  const num = Number(merged);
+  return Number.isFinite(num) ? num : null;
+}
+
 function parseAlcoholValue(text) {
-  const cleaned = String(text || "")
-    .replace(/alc/gi, "")
-    .replace(/[^\d.]/g, "")
-    .trim();
-  if (!cleaned) return null;
-  const value = Number(cleaned);
+  const value = parseDecimalValue(String(text || "").replace(/alc/gi, ""));
   if (!Number.isFinite(value)) return null;
   return Math.max(0, value);
 }
@@ -2034,7 +2055,7 @@ function normalizeAttendancePolicy(raw) {
 }
 
 function normalizeAlcoholLimit(value) {
-  const num = Number(value);
+  const num = parseDecimalValue(value);
   if (!Number.isFinite(num)) return Number(DEFAULT_ALCOHOL_LIMIT || 0);
   return Math.min(1, Math.max(0, Number(num.toFixed(2))));
 }
