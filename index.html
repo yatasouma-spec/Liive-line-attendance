@@ -15,8 +15,9 @@
   <body>
     <div class="app">
       <aside class="sidebar">
-        <div class="brand">Liive勤怠</div>
-        <p class="brand-sub">一般廃棄物向け 勤怠管理</p>
+        <div class="brand">
+          <img src="./liive_logo.svg" alt="Liiveロゴ" class="brand-logo" />
+        </div>
         <nav>
           <button type="button" class="nav-link active" data-view="dashboard">ダッシュボード</button>
           <button type="button" class="nav-link" data-view="punch">打刻（LINE）</button>
@@ -353,6 +354,10 @@
                 <input id="employeeName" type="text" placeholder="社員名" required />
                 <input id="employeeWorkStart" type="time" value="09:00" required />
                 <input id="employeeWorkEnd" type="time" value="17:00" required />
+                <select id="employeeAlcoholMode" aria-label="飲酒チェック設定">
+                  <option value="on">飲酒チェックあり</option>
+                  <option value="off">飲酒チェックなし</option>
+                </select>
                 <button type="submit" class="btn">社員を追加</button>
               </form>
               <div class="table-wrap">
@@ -362,6 +367,7 @@
                       <th>コード</th>
                       <th>社員名</th>
                       <th>標準勤務</th>
+                      <th>飲酒チェック</th>
                       <th>状態</th>
                       <th>操作</th>
                     </tr>

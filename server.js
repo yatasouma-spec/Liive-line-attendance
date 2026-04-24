@@ -243,9 +243,9 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       if (text === expected) {
         clearPendingConfirm(db, userId);
         if (pendingConfirm.action === "checkin") {
-          startCheckinFlow(db, userId, pendingConfirm.employee, pendingConfirm.site);
+          const checkinGuide = startCheckinFlow(db, userId, pendingConfirm.employee, pendingConfirm.site);
           writeDb(db);
-          await replyToEvent(`出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`, { withQuickReply: true, quickReplyType: "alcohol" });
+          await replyToEvent(checkinGuide.message, { withQuickReply: true, quickReplyType: checkinGuide.quickReplyType });
           continue;
         }
         writeDb(db);
@@ -275,6 +275,10 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     const flow = db.lineWorkflows?.[userId];
     if (flow?.type === "checkin") {
       if (flow.stage === "need_alcohol" && text === "ALC その他") {
+        flow.stage = "need_alcohol_manual";
+        flow.updatedAt = new Date().toISOString();
+        db.lineWorkflows[userId] = flow;
+        writeDb(db);
         await replyToEvent("飲酒値を手入力してください（例: 0.03 または ALC 0.03）。", { withQuickReply: true, quickReplyType: "alcohol" });
         continue;
       }
@@ -329,9 +333,9 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     }
 
     if (action === "checkin") {
-      startCheckinFlow(db, userId, employee, site);
+      const checkinGuide = startCheckinFlow(db, userId, employee, site);
       writeDb(db);
-      await replyToEvent(`出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信`, { withQuickReply: true, quickReplyType: "alcohol" });
+      await replyToEvent(checkinGuide.message, { withQuickReply: true, quickReplyType: checkinGuide.quickReplyType });
       continue;
     }
 
@@ -379,6 +383,7 @@ app.post("/api/employees/sync", (req, res) => {
       active: e?.active !== false,
       workStart: String(e?.workStart || "09:00"),
       workEnd: String(e?.workEnd || "17:00"),
+      requiresAlcoholCheck: e?.requiresAlcoholCheck !== false,
       bufferBeforeMin: normalizeOptionalMinute(e?.bufferBeforeMin),
       bufferAfterMin: normalizeOptionalMinute(e?.bufferAfterMin),
     };
@@ -988,14 +993,28 @@ function clearPendingConfirm(db, userId) {
 }
 
 function startCheckinFlow(db, userId, employee, site) {
+  const rule = getEmployeeRuleFromDb(db, employee);
+  const requiresAlcoholCheck = rule.requiresAlcoholCheck !== false;
+  const stage = requiresAlcoholCheck ? "need_alcohol" : "need_face_photo";
   db.lineWorkflows = db.lineWorkflows || {};
   db.lineWorkflows[userId] = {
     type: "checkin",
-    stage: "need_alcohol",
+    stage,
     employee,
     site,
+    requiresAlcoholCheck,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+  };
+  if (requiresAlcoholCheck) {
+    return {
+      message: "出勤前チェックを開始します。\n1) 飲酒値を送信（例: ALC 0.00）\n2) 測定器写真送信\n3) 本人写真送信\n4) 位置情報送信",
+      quickReplyType: "alcohol",
+    };
+  }
+  return {
+    message: "出勤前チェックを開始します。\n1) 本人写真送信\n2) 位置情報送信",
+    quickReplyType: "photo_face",
   };
 }
 
@@ -1086,12 +1105,16 @@ function advanceCheckinFlow(db, userId, text, profile) {
     return { message: "出勤ボタンから再開してください。", withQuickReply: true, finalize: false };
   }
 
-  if (flow.stage === "need_alcohol") {
+  if (flow.stage === "need_alcohol" || flow.stage === "need_alcohol_manual") {
     const alcoholValue = parseAlcoholValue(text);
     if (alcoholValue === null) {
       return {
-        message: "飲酒値を送信してください（例: ALC 0.00）。",
+        message:
+          flow.stage === "need_alcohol_manual"
+            ? "飲酒値を手入力してください（例: 0.03 または ALC 0.03）。"
+            : "飲酒値を送信してください（例: ALC 0.00）。",
         withQuickReply: true,
+        quickReplyType: "alcohol",
         finalize: false,
       };
     }
@@ -2124,6 +2147,7 @@ function getEmployeeRuleFromDb(db, employeeName) {
   return {
     workStart,
     workEnd,
+    requiresAlcoholCheck: rule.requiresAlcoholCheck !== false,
     bufferBeforeMin:
       Number.isFinite(Number(rule.bufferBeforeMin)) && rule.bufferBeforeMin !== null
         ? Number(rule.bufferBeforeMin)

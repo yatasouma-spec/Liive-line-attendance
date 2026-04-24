@@ -21,11 +21,11 @@ const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
 
 const defaultEmployees = [
-  { id: "e1", code: "E001", name: "田中", active: true, workStart: "09:00", workEnd: "17:00" },
-  { id: "e2", code: "E002", name: "佐藤", active: true, workStart: "09:00", workEnd: "17:00" },
-  { id: "e3", code: "E003", name: "鈴木", active: true, workStart: "09:00", workEnd: "17:00" },
-  { id: "e4", code: "E004", name: "高橋", active: true, workStart: "09:00", workEnd: "17:00" },
-  { id: "e5", code: "E005", name: "伊藤", active: true, workStart: "09:00", workEnd: "17:00" },
+  { id: "e1", code: "E001", name: "田中", active: true, workStart: "09:00", workEnd: "17:00", requiresAlcoholCheck: true },
+  { id: "e2", code: "E002", name: "佐藤", active: true, workStart: "09:00", workEnd: "17:00", requiresAlcoholCheck: true },
+  { id: "e3", code: "E003", name: "鈴木", active: true, workStart: "09:00", workEnd: "17:00", requiresAlcoholCheck: true },
+  { id: "e4", code: "E004", name: "高橋", active: true, workStart: "09:00", workEnd: "17:00", requiresAlcoholCheck: true },
+  { id: "e5", code: "E005", name: "伊藤", active: true, workStart: "09:00", workEnd: "17:00", requiresAlcoholCheck: true },
 ];
 
 const defaultRoutes = [
@@ -98,6 +98,7 @@ function normalizeEmployeeRows() {
     active: e.active !== false,
     workStart: normalizeText(e.workStart || "09:00"),
     workEnd: normalizeText(e.workEnd || "17:00"),
+    requiresAlcoholCheck: e.requiresAlcoholCheck !== false,
   }));
   state.attendancePolicy = normalizeAttendancePolicy(state.attendancePolicy);
 }
@@ -1605,6 +1606,7 @@ function renderMasters() {
       <td>${e.code}</td>
       <td>${e.name}</td>
       <td>${normalizeText(e.workStart || "09:00")} - ${normalizeText(e.workEnd || "17:00")}</td>
+      <td><span class="badge ${e.requiresAlcoholCheck !== false ? "warn" : "ok"}">${e.requiresAlcoholCheck !== false ? "あり" : "なし"}</span></td>
       <td><span class="badge ${e.active ? "ok" : "warn"}">${e.active ? "有効" : "無効"}</span></td>
       <td>
         <button class="btn btn-ghost" data-edit-emp="${e.id}">編集</button>
@@ -2618,6 +2620,7 @@ async function syncEmployeesToServer() {
           active: !!e.active,
           workStart: normalizeText(e.workStart || "09:00"),
           workEnd: normalizeText(e.workEnd || "17:00"),
+          requiresAlcoholCheck: e.requiresAlcoholCheck !== false,
           bufferBeforeMin: normalizeOptionalMinute(e.bufferBeforeMin),
           bufferAfterMin: normalizeOptionalMinute(e.bufferAfterMin),
         })),
@@ -2868,6 +2871,8 @@ function bindMasterEvents() {
     const name = normalizeText(document.getElementById("employeeName").value);
     const workStart = normalizeText(document.getElementById("employeeWorkStart")?.value || "09:00");
     const workEnd = normalizeText(document.getElementById("employeeWorkEnd")?.value || "17:00");
+    const alcoholMode = normalizeText(document.getElementById("employeeAlcoholMode")?.value || "on");
+    const requiresAlcoholCheck = alcoholMode !== "off";
     if (!code || !name || !isValidTimeText(workStart) || !isValidTimeText(workEnd)) {
       alert("社員コード・社員名・標準出勤/退勤時刻を入力してください。");
       return;
@@ -2880,13 +2885,15 @@ function bindMasterEvents() {
       alert("同じ社員名があります");
       return;
     }
-    state.employees.push({ id: uid("e"), code, name, active: true, workStart, workEnd });
+    state.employees.push({ id: uid("e"), code, name, active: true, workStart, workEnd, requiresAlcoholCheck });
     document.getElementById("employeeCode").value = "";
     document.getElementById("employeeName").value = "";
     const ws = document.getElementById("employeeWorkStart");
     const we = document.getElementById("employeeWorkEnd");
+    const alcohol = document.getElementById("employeeAlcoholMode");
     if (ws) ws.value = "09:00";
     if (we) we.value = "17:00";
+    if (alcohol) alcohol.value = "on";
     renderAll();
     syncEmployeesToServer();
   });
@@ -3043,7 +3050,21 @@ function bindMasterEvents() {
       const nextName = normalizeText(window.prompt("社員名を変更", row.name));
       const nextStart = normalizeText(window.prompt("標準出勤時刻を変更 (HH:MM)", row.workStart || "09:00"));
       const nextEnd = normalizeText(window.prompt("標準退勤時刻を変更 (HH:MM)", row.workEnd || "17:00"));
+      const currentAlcoholMode = row.requiresAlcoholCheck !== false ? "on" : "off";
+      const nextAlcoholRaw = normalizeText(
+        window.prompt("飲酒チェック設定を入力 (on:あり / off:なし)", currentAlcoholMode) || currentAlcoholMode
+      ).toLowerCase();
+      const nextRequiresAlcoholCheck =
+        nextAlcoholRaw === "on" || nextAlcoholRaw === "あり" || nextAlcoholRaw === "yes" || nextAlcoholRaw === "true" || nextAlcoholRaw === "1"
+          ? true
+          : nextAlcoholRaw === "off" || nextAlcoholRaw === "なし" || nextAlcoholRaw === "no" || nextAlcoholRaw === "false" || nextAlcoholRaw === "0"
+            ? false
+            : null;
       if (!nextCode || !nextName || !isValidTimeText(nextStart) || !isValidTimeText(nextEnd)) return;
+      if (nextRequiresAlcoholCheck === null) {
+        alert("飲酒チェック設定は on または off で入力してください。");
+        return;
+      }
       if (state.employees.some((x) => x.id !== row.id && normalizeText(x.code) === nextCode)) {
         alert("同じ社員コードがあります");
         return;
@@ -3057,6 +3078,7 @@ function bindMasterEvents() {
       row.name = nextName;
       row.workStart = nextStart;
       row.workEnd = nextEnd;
+      row.requiresAlcoholCheck = nextRequiresAlcoholCheck;
       renameEmployeeReferences(beforeName, row.name);
       renderAll();
       renameLineMappings(beforeName, row.name, row.id);
