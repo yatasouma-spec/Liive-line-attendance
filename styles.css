@@ -141,9 +141,9 @@ button {
 
 .brand-logo {
   display: block;
-  width: 84px;
+  width: min(220px, 100%);
   height: auto;
-  border-radius: 16px;
+  border-radius: 0;
 }
 
 .brand-sub {

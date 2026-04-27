@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Liive勤怠 | 一般廃棄物向け</title>
+    <link rel="icon" type="image/png" href="./favicon-32x32.png" sizes="32x32" />
+    <link rel="icon" type="image/png" href="./favicon-192x192.png" sizes="192x192" />
+    <link rel="shortcut icon" href="./favicon.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" sizes="180x180" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -16,7 +20,7 @@
     <div class="app">
       <aside class="sidebar">
         <div class="brand">
-          <img src="./liive_logo_icon.png" alt="Liiveロゴ" class="brand-logo" />
+          <img src="./liive_logo.svg" alt="Liiveロゴ" class="brand-logo" />
         </div>
         <nav>
           <button type="button" class="nav-link active" data-view="dashboard">ダッシュボード</button>
@@ -36,14 +40,8 @@
           <h1 id="pageTitle">ダッシュボード</h1>
           <div class="topbar-actions">
             <label class="theme-label" for="themeSelect">デザインテーマ</label>
-            <select id="themeSelect" class="theme-select" aria-label="デザインテーマ">
+            <select id="themeSelect" class="theme-select" aria-label="デザインテーマ" disabled>
               <option value="blue">Blue</option>
-              <option value="lightblue">LightBlue</option>
-              <option value="cyan">Cyan</option>
-              <option value="green">Green</option>
-              <option value="orange">Orange</option>
-              <option value="red">Red</option>
-              <option value="solidgray">SolidGray</option>
             </select>
           </div>
         </header>

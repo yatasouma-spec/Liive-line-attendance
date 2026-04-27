@@ -70,7 +70,7 @@ const state = {
   lineUsers: [],
   lineChannels: [],
   editingShiftId: "",
-  theme: loadJson(THEME_KEY, "blue"),
+  theme: "blue",
   attendancePolicy: loadJson(ATTENDANCE_POLICY_KEY, defaultAttendancePolicy),
   alcoholLimit: loadJson(ALCOHOL_LIMIT_KEY, defaultAlcoholLimit),
   startSites: loadJson(START_SITES_KEY, []),
@@ -270,8 +270,7 @@ function switchView(nextView) {
 }
 
 function applyTheme(themeName) {
-  const allow = ["blue", "lightblue", "cyan", "green", "orange", "red", "solidgray"];
-  const next = allow.includes(themeName) ? themeName : "blue";
+  const next = "blue";
   state.theme = next;
   document.body.setAttribute("data-theme", next);
   const sel = document.getElementById("themeSelect");
