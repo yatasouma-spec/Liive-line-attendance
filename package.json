@@ -8,6 +8,9 @@
     "dev": "NODE_ENV=development node server.js"
   },
   "dependencies": {
+    "@aws-sdk/client-rekognition": "^3.908.0",
+    "@aws-sdk/client-textract": "^3.908.0",
+    "@supabase/supabase-js": "^2.57.4",
     "express": "^4.21.2",
     "xlsx": "^0.18.5"
   }

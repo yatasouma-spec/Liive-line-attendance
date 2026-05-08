@@ -11,6 +11,7 @@
   - `POST /api/line-action` Web画面からの打刻API
   - `GET /api/bootstrap` 管理画面同期API
   - `GET /api/health` ヘルスチェック
+  - `GET /api/system/persistence-status` 永続化/照合設定の確認API
 - `app.v3.js`
   - API優先モード（httpで開いた場合はAPI同期）
   - LINE打刻結果の自動反映（5秒ポーリング）
@@ -31,11 +32,42 @@ open "http://localhost:3000/index.html"
    - 例: `https://<your-domain>/line/webhook`
 5. Webhook利用をON
 6. 応答メッセージ（LINE公式の自動応答）はOFF推奨
+7. リッチメニューの「マニュアル確認」は
+   - `メッセージ送信`: `マニュアル確認` もしくは
+   - `URI`: `https://<your-domain>/manual/index.html`
+   のどちらかに設定
 
 ## 5. 環境変数
 - `LINE_CHANNEL_SECRET`
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `LINE_USER_MAP_JSON`（任意）
+- `MANUAL_PUBLIC_URL`（推奨: `https://<your-domain>/manual/index.html`）
+- `MANUAL_PAGE_PATH`（任意: 既定 `/manual/index.html`）
+
+### 5-1. Supabase（DB永続化）
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_STATE_TABLE`（任意: 既定 `app_state_snapshots`）
+- `SUPABASE_STATE_KEY`（任意: 既定 `liive-primary`）
+- `APP_TENANT_ID`（任意: 既定 `default`）
+
+### 5-2. Supabase Storage（証拠画像）
+- `SUPABASE_STORAGE_BUCKET`（例: `liive-evidence`）
+- `SUPABASE_EVIDENCE_PREFIX`（任意: 既定 `evidence`）
+- `EVIDENCE_RETENTION_DAYS`（任意: 既定 `730`）
+
+### 5-3. 顔認識・飲酒値照合
+- `EVIDENCE_VERIFICATION_MODE`
+  - `off`（既定）
+  - `warn`（照合失敗を警告として記録）
+  - `strict`（照合失敗/未完了時に打刻を保留）
+- `AWS_REKOGNITION_ENABLED=true`
+- `AWS_TEXTRACT_ENABLED=true`
+- `AWS_REGION`（例: `ap-northeast-1`）
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `FACE_MATCH_THRESHOLD`（任意: 既定 `90`）
+- `ALCOHOL_OCR_TOLERANCE`（任意: 既定 `0.02`）
 
 ### LINE_USER_MAP_JSON 例
 ```json
@@ -52,8 +84,15 @@ open "http://localhost:3000/index.html"
    - Build Command: `npm install`
    - Start Command: `npm start`
    - Environment: `Node`
-4. Environment Variablesに上記3つを登録
+4. Environment Variablesに上記環境変数を登録
 5. デプロイ後のURLをLINE Webhook URLへ設定
+
+### 6-1. Supabase初期化
+1. Supabaseを作成
+2. SQL Editorで `supabase/init.sql` を実行
+3. Storageバケット（例: `liive-evidence`）を作成
+4. Render環境変数に `SUPABASE_*` を設定
+5. `/api/system/persistence-status` で `supabase.enabled=true` を確認
 
 ## 7. 動作確認シナリオ
 1. LINEで `出勤` を送る
@@ -61,13 +100,16 @@ open "http://localhost:3000/index.html"
 3. `休憩開始` → `休憩終了` を送る
 4. `退勤` を送る
 5. 月次集計に勤務時間/休憩/残業が反映される
+6. LINEで `マニュアル確認` を送って、社員マニュアルURLが返る
 
 ## 8. 本番前チェック
 - HTTPSドメインで公開されている
 - `/api/health` が200で返る
+- `/api/system/persistence-status` が200で、設定値が想定どおり
 - Webhook署名エラーが出ない
 - LINEユーザーIDと社員名マップが正しい
 - CSV出力で勤怠データが取得できる
+- `/manual/index.html` がスマホで閲覧できる
 
 ## 9. 重要
 - まずはLINE連携で本番検証

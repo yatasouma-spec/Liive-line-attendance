@@ -2,6 +2,9 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import express from "express";
+import { createClient } from "@supabase/supabase-js";
+import { CompareFacesCommand, RekognitionClient } from "@aws-sdk/client-rekognition";
+import { DetectDocumentTextCommand, TextractClient } from "@aws-sdk/client-textract";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -46,8 +49,39 @@ const DEFAULT_ATTENDANCE_POLICY = {
   globalBeforeMin: 10,
   globalAfterMin: 10,
 };
+const APP_TENANT_ID = String(process.env.APP_TENANT_ID || "default").trim() || "default";
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const SUPABASE_STATE_TABLE = String(process.env.SUPABASE_STATE_TABLE || "app_state_snapshots").trim() || "app_state_snapshots";
+const SUPABASE_STATE_KEY = String(process.env.SUPABASE_STATE_KEY || "liive-primary").trim() || "liive-primary";
+const SUPABASE_STORAGE_BUCKET = String(process.env.SUPABASE_STORAGE_BUCKET || "").trim();
+const SUPABASE_EVIDENCE_PREFIX = String(process.env.SUPABASE_EVIDENCE_PREFIX || "evidence").trim() || "evidence";
+const EVIDENCE_VERIFICATION_MODE = normalizeEvidenceVerificationMode(process.env.EVIDENCE_VERIFICATION_MODE || "off");
+const FACE_MATCH_THRESHOLD = clampPercent(process.env.FACE_MATCH_THRESHOLD, 90);
+const ALCOHOL_OCR_TOLERANCE = clampDecimal(process.env.ALCOHOL_OCR_TOLERANCE, 0.02, 0, 0.5);
+const AWS_REGION = String(process.env.AWS_REGION || "ap-northeast-1").trim() || "ap-northeast-1";
+const AWS_REKOGNITION_ENABLED = parseBooleanEnv(process.env.AWS_REKOGNITION_ENABLED, false);
+const AWS_TEXTRACT_ENABLED = parseBooleanEnv(process.env.AWS_TEXTRACT_ENABLED, false);
+
+const supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      })
+    : null;
+const rekognitionClient = AWS_REKOGNITION_ENABLED ? new RekognitionClient({ region: AWS_REGION }) : null;
+const textractClient = AWS_TEXTRACT_ENABLED ? new TextractClient({ region: AWS_REGION }) : null;
+const remoteStateSync = {
+  inFlight: false,
+  pending: null,
+  lastSyncedAt: null,
+  lastError: "",
+  lastWarning: "",
+  bootstrappedAt: null,
+};
 
 ensureDataFile();
+await initializeExternalPersistence();
 
 app.post("/line/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const body = req.body;
@@ -113,41 +147,26 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
           });
           continue;
         }
-        db.alcoholEvidence = db.alcoholEvidence || [];
-        db.alcoholEvidence.push({
+        const completion = await finalizeCheckinWithEvidence({
+          db,
           userId,
-          employee: flow.employee,
-          site: flow.site,
-          alcoholValue: Number(flow.alcoholValue || 0),
-          meterImageId: flow.meterImageId || "",
-          faceImageId: flow.faceImageId || "",
+          employee,
+          site,
+          lineChannel: inboundChannelId,
+          flow,
           gps: { lat, lng },
-          at: new Date().toISOString(),
-          expiresAt: Date.now() + EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
         });
-        db.alcoholEvidence = db.alcoholEvidence.filter((row) => Number(row.expiresAt || 0) >= Date.now()).slice(-10000);
-        delete db.lineWorkflows[userId];
-        writeDb(db);
-        try {
-          const snapshot = processLineAction({
-            employee,
-            site,
-            action: "checkin",
-            source: "LINE",
-            lineUserId: userId,
-            gps: { lat, lng },
-            alcohol: {
-              value: Number(flow.alcoholValue || 0),
-              meterImageId: flow.meterImageId || "",
-              faceImageId: flow.faceImageId || "",
-              retentionDays: EVIDENCE_RETENTION_DAYS,
-            },
+        if (!completion.ok) {
+          await replyToEvent(completion.message, {
+            withQuickReply: true,
+            quickReplyType: completion.quickReplyType || "attendance",
           });
-          const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
-          await replyToEvent(msg, { withQuickReply: true });
-        } catch (error) {
-          await replyToEvent(String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
+          continue;
         }
+        const msg =
+          `受け付けました: ${flow.employee || employee} / ${flow.site || site} / 出勤 (${completion.snapshot?.lineSync?.time || "-"})` +
+          (completion.warningMessage ? `\n${completion.warningMessage}` : "");
+        await replyToEvent(msg, { withQuickReply: true });
         continue;
       }
       writeDb(db);
@@ -163,7 +182,15 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         continue;
       }
       if (flow.stage === "need_meter_photo") {
+        const meterEvidence = await cacheLineEvidenceImage({
+          lineMessageId: event.message.id,
+          lineChannel: inboundChannelId,
+          userId,
+          employee: flow.employee || employee,
+          kind: "meter",
+        });
         flow.meterImageId = event.message.id;
+        flow.meterEvidence = meterEvidence;
         flow.stage = "need_face_photo";
         flow.updatedAt = new Date().toISOString();
         db.lineWorkflows[userId] = flow;
@@ -175,7 +202,15 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
         continue;
       }
       if (flow.stage === "need_face_photo") {
+        const faceEvidence = await cacheLineEvidenceImage({
+          lineMessageId: event.message.id,
+          lineChannel: inboundChannelId,
+          userId,
+          employee: flow.employee || employee,
+          kind: "face",
+        });
         flow.faceImageId = event.message.id;
+        flow.faceEvidence = faceEvidence;
         flow.stage = "need_location";
         flow.updatedAt = new Date().toISOString();
         db.lineWorkflows[userId] = flow;
@@ -311,25 +346,26 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       const next = advanceCheckinFlow(db, userId, text, profile);
       writeDb(db);
       if (next.finalize) {
-        try {
-          const snapshot = processLineAction({
-            employee,
-            site,
-            action: "checkin",
-            source: "LINE",
-            lineUserId: userId,
-            gps: next.gps || null,
-            alcohol: {
-              value: next.alcoholValue,
-              meterImageId: next.meterImageId || "",
-              faceImageId: next.faceImageId || "",
-              retentionDays: EVIDENCE_RETENTION_DAYS,
-            },
+        const activeFlow = db.lineWorkflows?.[userId] || flow;
+        const completion = await finalizeCheckinWithEvidence({
+          db,
+          userId,
+          employee,
+          site,
+          lineChannel: inboundChannelId,
+          flow: activeFlow,
+          gps: next.gps || null,
+        });
+        if (!completion.ok) {
+          await replyToEvent(completion.message, {
+            withQuickReply: true,
+            quickReplyType: completion.quickReplyType || "attendance",
           });
-          const msg = `受け付けました: ${employee} / ${site} / 出勤 (${snapshot.lineSync?.time || "-"})`;
+        } else {
+          const msg =
+            `受け付けました: ${(activeFlow?.employee || employee)} / ${(activeFlow?.site || site)} / 出勤 (${completion.snapshot?.lineSync?.time || "-"})` +
+            (completion.warningMessage ? `\n${completion.warningMessage}` : "");
           await replyToEvent(msg, { withQuickReply: true });
-        } catch (error) {
-          await replyToEvent(String(error?.message || "打刻できませんでした。"), { withQuickReply: true });
         }
       } else {
         const nextQuickReplyType = next.quickReplyType || (/飲酒値/.test(next.message) ? "alcohol" : "attendance");
@@ -381,6 +417,10 @@ app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "coreca-line-attendance", at: new Date().toISOString() });
+});
+
+app.get("/api/system/persistence-status", (_req, res) => {
+  res.json(buildPersistenceStatus());
 });
 
 app.get("/api/bootstrap", (_req, res) => {
@@ -856,6 +896,11 @@ setInterval(() => {
   runShiftAutoDelivery().catch(() => {});
 }, 60 * 1000);
 
+setInterval(() => {
+  if (!supabase || !remoteStateSync.pending) return;
+  drainRemoteStateSync().catch(() => {});
+}, 30 * 1000);
+
 function detectAction(text) {
   if (text.includes("出勤")) return "checkin";
   if (text.includes("退勤")) return "checkout";
@@ -1296,22 +1341,11 @@ function advanceCheckinFlow(db, userId, text, profile) {
       alcoholValue: Number(flow.alcoholValue || 0),
       meterImageId: flow.meterImageId || "",
       faceImageId: flow.faceImageId || "",
+      meterEvidence: flow.meterEvidence || null,
+      faceEvidence: flow.faceEvidence || null,
+      requiresAlcoholCheck: flow.requiresAlcoholCheck !== false,
       gps: { lat: gps.lat, lng: gps.lng },
     };
-    db.alcoholEvidence = db.alcoholEvidence || [];
-    db.alcoholEvidence.push({
-      userId,
-      employee: flow.employee,
-      site: flow.site,
-      alcoholValue: output.alcoholValue,
-      meterImageId: output.meterImageId,
-      faceImageId: output.faceImageId,
-      gps: output.gps,
-      at: new Date().toISOString(),
-      expiresAt: Date.now() + EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-    });
-    db.alcoholEvidence = db.alcoholEvidence.filter((row) => Number(row.expiresAt || 0) >= Date.now()).slice(-10000);
-    delete db.lineWorkflows[userId];
     return output;
   }
 
@@ -1747,6 +1781,702 @@ async function sendLinePush(to, text, options = {}) {
   }
 }
 
+function buildPersistenceStatus() {
+  return {
+    ok: true,
+    tenantId: APP_TENANT_ID,
+    supabase: {
+      enabled: Boolean(supabase),
+      stateTable: SUPABASE_STATE_TABLE,
+      stateKey: SUPABASE_STATE_KEY,
+      bootstrappedAt: remoteStateSync.bootstrappedAt,
+      lastSyncedAt: remoteStateSync.lastSyncedAt,
+      lastError: remoteStateSync.lastError,
+      lastWarning: remoteStateSync.lastWarning,
+      pendingSync: Boolean(remoteStateSync.pending),
+    },
+    storage: {
+      enabled: isEvidenceStorageEnabled(),
+      bucket: SUPABASE_STORAGE_BUCKET || "",
+      prefix: SUPABASE_EVIDENCE_PREFIX,
+    },
+    verification: {
+      mode: EVIDENCE_VERIFICATION_MODE,
+      rekognitionEnabled: Boolean(rekognitionClient),
+      textractEnabled: Boolean(textractClient),
+      faceMatchThreshold: FACE_MATCH_THRESHOLD,
+      alcoholOcrTolerance: ALCOHOL_OCR_TOLERANCE,
+    },
+  };
+}
+
+async function initializeExternalPersistence() {
+  if (!supabase) return;
+  try {
+    const remoteDb = await loadRemoteStateFromSupabase();
+    if (remoteDb) {
+      writeDb(remoteDb, { skipRemoteSync: true });
+      remoteStateSync.bootstrappedAt = new Date().toISOString();
+      return;
+    }
+    const localDb = readDb();
+    await upsertRemoteStateToSupabase(localDb);
+    remoteStateSync.bootstrappedAt = new Date().toISOString();
+  } catch (error) {
+    remoteStateSync.lastError = String(error?.message || error);
+    console.warn(`[PERSIST] initialization skipped: ${remoteStateSync.lastError}`);
+  }
+}
+
+async function loadRemoteStateFromSupabase() {
+  if (!supabase) return null;
+  const attempts = [
+    () =>
+      supabase
+        .from(SUPABASE_STATE_TABLE)
+        .select("data,updated_at")
+        .eq("tenant_id", APP_TENANT_ID)
+        .eq("state_key", SUPABASE_STATE_KEY)
+        .limit(1),
+    () => supabase.from(SUPABASE_STATE_TABLE).select("data,updated_at").eq("state_key", SUPABASE_STATE_KEY).limit(1),
+    () => supabase.from(SUPABASE_STATE_TABLE).select("data,updated_at").eq("key", SUPABASE_STATE_KEY).limit(1),
+  ];
+
+  for (const queryFactory of attempts) {
+    try {
+      const { data, error } = await queryFactory();
+      if (error) {
+        remoteStateSync.lastWarning = String(error?.message || error);
+        continue;
+      }
+      const row = Array.isArray(data) && data[0] && typeof data[0].data === "object" ? data[0] : null;
+      if (!row) continue;
+      remoteStateSync.lastSyncedAt = row.updated_at || new Date().toISOString();
+      return hydrateDbShape(row.data);
+    } catch (error) {
+      remoteStateSync.lastWarning = String(error?.message || error);
+    }
+  }
+  return null;
+}
+
+function enqueueRemoteStateSync(data) {
+  if (!supabase) return;
+  remoteStateSync.pending = deepCloneJson(data);
+  if (remoteStateSync.inFlight) return;
+  void drainRemoteStateSync();
+}
+
+async function drainRemoteStateSync() {
+  if (!supabase || remoteStateSync.inFlight) return;
+  remoteStateSync.inFlight = true;
+  try {
+    while (remoteStateSync.pending) {
+      const snapshot = remoteStateSync.pending;
+      remoteStateSync.pending = null;
+      const ok = await upsertRemoteStateToSupabase(snapshot);
+      if (!ok) {
+        remoteStateSync.pending = snapshot;
+        break;
+      }
+    }
+  } finally {
+    remoteStateSync.inFlight = false;
+  }
+}
+
+async function upsertRemoteStateToSupabase(data) {
+  if (!supabase) return false;
+  const payloads = [
+    {
+      row: {
+        tenant_id: APP_TENANT_ID,
+        state_key: SUPABASE_STATE_KEY,
+        data,
+        updated_at: new Date().toISOString(),
+      },
+      onConflict: "tenant_id,state_key",
+    },
+    {
+      row: {
+        state_key: SUPABASE_STATE_KEY,
+        data,
+        updated_at: new Date().toISOString(),
+      },
+      onConflict: "state_key",
+    },
+    {
+      row: {
+        key: SUPABASE_STATE_KEY,
+        data,
+        updated_at: new Date().toISOString(),
+      },
+      onConflict: "key",
+    },
+  ];
+
+  for (const candidate of payloads) {
+    try {
+      const { error } = await supabase.from(SUPABASE_STATE_TABLE).upsert(candidate.row, { onConflict: candidate.onConflict });
+      if (!error) {
+        remoteStateSync.lastSyncedAt = new Date().toISOString();
+        remoteStateSync.lastError = "";
+        return true;
+      }
+      remoteStateSync.lastWarning = String(error?.message || error);
+    } catch (error) {
+      remoteStateSync.lastWarning = String(error?.message || error);
+    }
+  }
+  remoteStateSync.lastError = remoteStateSync.lastWarning || "remote sync failed";
+  return false;
+}
+
+function isEvidenceStorageEnabled() {
+  return Boolean(supabase && SUPABASE_STORAGE_BUCKET);
+}
+
+async function cacheLineEvidenceImage({ lineMessageId, lineChannel, userId, employee, kind }) {
+  const evidence = {
+    lineMessageId: String(lineMessageId || ""),
+    lineChannel: normalizeLineChannel(lineChannel || "primary"),
+    kind: String(kind || ""),
+    employee: String(employee || ""),
+    userId: String(userId || ""),
+    contentType: "",
+    sizeBytes: 0,
+    storageBucket: "",
+    storagePath: "",
+    storageUploaded: false,
+    uploadedAt: new Date().toISOString(),
+    error: "",
+  };
+  if (!evidence.lineMessageId) {
+    evidence.error = "lineMessageId is empty";
+    return evidence;
+  }
+  const fetched = await fetchLineMessageContent(evidence.lineMessageId, evidence.lineChannel);
+  if (!fetched.ok || !fetched.buffer) {
+    evidence.error = fetched.error || "line image fetch failed";
+    return evidence;
+  }
+  evidence.contentType = fetched.contentType || "image/jpeg";
+  evidence.sizeBytes = fetched.buffer.length;
+  if (!isEvidenceStorageEnabled()) return evidence;
+
+  const storagePath = buildEvidenceStoragePath({
+    userId: evidence.userId,
+    employee: evidence.employee,
+    kind: evidence.kind,
+    lineMessageId: evidence.lineMessageId,
+    contentType: evidence.contentType,
+  });
+  try {
+    const { error } = await supabase.storage
+      .from(SUPABASE_STORAGE_BUCKET)
+      .upload(storagePath, fetched.buffer, { upsert: false, contentType: evidence.contentType });
+    if (error) {
+      evidence.error = String(error?.message || error);
+      return evidence;
+    }
+    evidence.storageBucket = SUPABASE_STORAGE_BUCKET;
+    evidence.storagePath = storagePath;
+    evidence.storageUploaded = true;
+    return evidence;
+  } catch (error) {
+    evidence.error = String(error?.message || error);
+    return evidence;
+  }
+}
+
+function buildEvidenceStoragePath({ userId, employee, kind, lineMessageId, contentType }) {
+  const datePart = getJstDateOffset(0).replace(/-/g, "");
+  const ext = extensionFromContentType(contentType || "image/jpeg");
+  const safeUser = sanitizePathToken(userId || "unknown");
+  const safeEmployee = sanitizePathToken(employee || "unknown");
+  const safeKind = sanitizePathToken(kind || "image");
+  const safeMessage = sanitizePathToken(lineMessageId || String(Date.now()));
+  return `${SUPABASE_EVIDENCE_PREFIX}/${APP_TENANT_ID}/${datePart}/${safeEmployee}_${safeUser}_${safeKind}_${safeMessage}.${ext}`;
+}
+
+function extensionFromContentType(contentType = "") {
+  const text = String(contentType || "").toLowerCase();
+  if (text.includes("png")) return "png";
+  if (text.includes("webp")) return "webp";
+  return "jpg";
+}
+
+function sanitizePathToken(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^\w\-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+}
+
+async function fetchLineMessageContent(lineMessageId, lineChannel = "primary") {
+  const channelConfig = getLineChannelConfig(lineChannel);
+  const accessToken = String(channelConfig?.accessToken || "");
+  if (!accessToken || !lineMessageId) {
+    return { ok: false, error: "missing LINE access token or message id", buffer: null, contentType: "" };
+  }
+  const messageId = encodeURIComponent(String(lineMessageId));
+  const endpoints = [
+    `https://api-data.line.me/v2/bot/message/${messageId}/content`,
+    `https://api.line.me/v2/bot/message/${messageId}/content`,
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) continue;
+      const arrayBuffer = await response.arrayBuffer();
+      return {
+        ok: true,
+        error: "",
+        buffer: Buffer.from(arrayBuffer),
+        contentType: String(response.headers.get("content-type") || "image/jpeg"),
+      };
+    } catch (_error) {}
+  }
+  return { ok: false, error: "line image content fetch failed", buffer: null, contentType: "" };
+}
+
+async function fetchLineProfile(userId, lineChannel = "primary") {
+  const channelConfig = getLineChannelConfig(lineChannel);
+  const accessToken = String(channelConfig?.accessToken || "");
+  if (!accessToken || !userId || userId === "unknown") return null;
+  try {
+    const response = await fetch(`https://api.line.me/v2/bot/profile/${encodeURIComponent(userId)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function fetchUrlBuffer(urlText) {
+  if (!isHttpUrl(urlText)) return null;
+  try {
+    const response = await fetch(urlText);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function fetchStorageBuffer(bucket, objectPath) {
+  if (!supabase || !bucket || !objectPath) return null;
+  try {
+    const { data, error } = await supabase.storage.from(bucket).download(objectPath);
+    if (error || !data) return null;
+    const arrayBuffer = await data.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function resolveEvidenceBuffer(evidence, lineChannel = "primary") {
+  if (!evidence || typeof evidence !== "object") {
+    return { ok: false, buffer: null, source: "", error: "evidence is empty" };
+  }
+  if (evidence.storageUploaded && evidence.storageBucket && evidence.storagePath) {
+    const storageBuffer = await fetchStorageBuffer(evidence.storageBucket, evidence.storagePath);
+    if (storageBuffer) return { ok: true, buffer: storageBuffer, source: "supabase_storage", error: "" };
+  }
+  if (evidence.lineMessageId) {
+    const fetched = await fetchLineMessageContent(evidence.lineMessageId, lineChannel);
+    if (fetched.ok && fetched.buffer) {
+      return { ok: true, buffer: fetched.buffer, source: "line_content_api", error: "" };
+    }
+    return { ok: false, buffer: null, source: "line_content_api", error: fetched.error || "line image fetch failed" };
+  }
+  return { ok: false, buffer: null, source: "", error: "image source unavailable" };
+}
+
+function buildEvidenceReference(flowEvidence, fallbackMessageId, kind = "") {
+  if (flowEvidence && typeof flowEvidence === "object") {
+    return {
+      ...flowEvidence,
+      lineMessageId: String(flowEvidence.lineMessageId || fallbackMessageId || ""),
+      kind: String(flowEvidence.kind || kind || ""),
+    };
+  }
+  return {
+    lineMessageId: String(fallbackMessageId || ""),
+    lineChannel: "primary",
+    kind: String(kind || ""),
+    employee: "",
+    userId: "",
+    contentType: "",
+    sizeBytes: 0,
+    storageBucket: "",
+    storagePath: "",
+    storageUploaded: false,
+    uploadedAt: null,
+    error: "",
+  };
+}
+
+async function verifyFaceEvidence({ userId, lineChannel, faceEvidence }) {
+  const result = {
+    status: "skipped",
+    reason: "",
+    similarity: null,
+    threshold: FACE_MATCH_THRESHOLD,
+    source: "",
+  };
+  if (!rekognitionClient) {
+    result.reason = "rekognition_disabled";
+    return result;
+  }
+  if (!userId || userId === "unknown") {
+    result.status = "warn";
+    result.reason = "line_user_unknown";
+    return result;
+  }
+  const selfie = await resolveEvidenceBuffer(faceEvidence, lineChannel);
+  if (!selfie.ok || !selfie.buffer) {
+    result.status = "fail";
+    result.reason = selfie.error || "face_image_missing";
+    return result;
+  }
+
+  const profile = await fetchLineProfile(userId, lineChannel);
+  const pictureUrl = String(profile?.pictureUrl || "");
+  if (!pictureUrl) {
+    result.status = "warn";
+    result.reason = "line_profile_picture_missing";
+    return result;
+  }
+  const referenceBuffer = await fetchUrlBuffer(pictureUrl);
+  if (!referenceBuffer) {
+    result.status = "warn";
+    result.reason = "line_profile_picture_fetch_failed";
+    return result;
+  }
+
+  try {
+    const response = await rekognitionClient.send(
+      new CompareFacesCommand({
+        SourceImage: { Bytes: referenceBuffer },
+        TargetImage: { Bytes: selfie.buffer },
+        SimilarityThreshold: FACE_MATCH_THRESHOLD,
+      })
+    );
+    const similarity = Number(response?.FaceMatches?.[0]?.Similarity || 0);
+    result.similarity = Number(similarity.toFixed(2));
+    result.source = selfie.source;
+    if (similarity >= FACE_MATCH_THRESHOLD) {
+      result.status = "pass";
+      result.reason = "matched";
+      return result;
+    }
+    result.status = "fail";
+    result.reason = "not_matched";
+    return result;
+  } catch (error) {
+    result.status = "warn";
+    result.reason = `rekognition_error:${String(error?.message || error)}`;
+    return result;
+  }
+}
+
+async function verifyAlcoholEvidence({ manualAlcoholValue, lineChannel, meterEvidence, requiresAlcoholCheck }) {
+  const result = {
+    status: "skipped",
+    reason: "",
+    manualAlcoholValue: Number(manualAlcoholValue || 0),
+    extractedValue: null,
+    tolerance: ALCOHOL_OCR_TOLERANCE,
+    difference: null,
+    candidates: [],
+    source: "",
+  };
+  if (!requiresAlcoholCheck) {
+    result.reason = "not_required";
+    return result;
+  }
+  if (!Number.isFinite(Number(manualAlcoholValue))) {
+    result.status = "fail";
+    result.reason = "manual_value_missing";
+    return result;
+  }
+  if (!textractClient) {
+    result.status = "warn";
+    result.reason = "textract_disabled";
+    return result;
+  }
+  const meterImage = await resolveEvidenceBuffer(meterEvidence, lineChannel);
+  if (!meterImage.ok || !meterImage.buffer) {
+    result.status = "fail";
+    result.reason = meterImage.error || "meter_image_missing";
+    return result;
+  }
+  try {
+    const response = await textractClient.send(
+      new DetectDocumentTextCommand({
+        Document: { Bytes: meterImage.buffer },
+      })
+    );
+    const detectedText = (response?.Blocks || [])
+      .filter((b) => b?.BlockType === "LINE" || b?.BlockType === "WORD")
+      .map((b) => String(b?.Text || ""))
+      .join(" ");
+    const candidates = extractAlcoholCandidates(detectedText);
+    result.candidates = candidates.slice(0, 10);
+    result.source = meterImage.source;
+    if (!candidates.length) {
+      result.status = "warn";
+      result.reason = "ocr_value_not_found";
+      return result;
+    }
+    const manual = Number(manualAlcoholValue);
+    const best = candidates
+      .map((value) => ({ value, diff: Math.abs(value - manual) }))
+      .sort((a, b) => a.diff - b.diff)[0];
+    result.extractedValue = Number(best.value.toFixed(2));
+    result.difference = Number(best.diff.toFixed(3));
+    if (best.diff <= ALCOHOL_OCR_TOLERANCE) {
+      result.status = "pass";
+      result.reason = "matched";
+      return result;
+    }
+    result.status = "fail";
+    result.reason = "mismatch";
+    return result;
+  } catch (error) {
+    result.status = "warn";
+    result.reason = `textract_error:${String(error?.message || error)}`;
+    return result;
+  }
+}
+
+function extractAlcoholCandidates(text) {
+  const normalized = String(text || "")
+    .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/．/g, ".")
+    .replace(/，/g, ".")
+    .replace(/[^\d.\s]/g, " ");
+  const matches = normalized.match(/\d+(?:\.\d{1,3})?/g) || [];
+  const values = [];
+  for (const token of matches) {
+    const value = parseDecimalValue(token);
+    if (!Number.isFinite(value)) continue;
+    if (value < 0 || value > 1.5) continue;
+    values.push(Number(value.toFixed(2)));
+  }
+  return Array.from(new Set(values)).sort((a, b) => a - b);
+}
+
+async function verifyCheckinEvidence({ userId, lineChannel, flow }) {
+  const requiresAlcoholCheck = flow?.requiresAlcoholCheck !== false;
+  if (EVIDENCE_VERIFICATION_MODE === "off") {
+    return {
+      status: "skip",
+      mode: EVIDENCE_VERIFICATION_MODE,
+      checkedAt: new Date().toISOString(),
+      requiresAlcoholCheck,
+      face: { status: "skipped", reason: "mode_off" },
+      alcohol: { status: "skipped", reason: "mode_off" },
+    };
+  }
+  const faceEvidence = buildEvidenceReference(flow?.faceEvidence, flow?.faceImageId, "face");
+  const meterEvidence = buildEvidenceReference(flow?.meterEvidence, flow?.meterImageId, "meter");
+  const face = await verifyFaceEvidence({
+    userId,
+    lineChannel,
+    faceEvidence,
+  });
+  const alcohol = await verifyAlcoholEvidence({
+    manualAlcoholValue: Number(flow?.alcoholValue || 0),
+    lineChannel,
+    meterEvidence,
+    requiresAlcoholCheck,
+  });
+
+  let status = "pass";
+  if (face.status === "fail" || alcohol.status === "fail") status = "fail";
+  else if (face.status === "skipped" && alcohol.status === "skipped") status = "skip";
+  else if (face.status === "warn" || alcohol.status === "warn" || face.status === "skipped" || alcohol.status === "skipped")
+    status = "warn";
+
+  return {
+    status,
+    mode: EVIDENCE_VERIFICATION_MODE,
+    checkedAt: new Date().toISOString(),
+    requiresAlcoholCheck,
+    face,
+    alcohol,
+  };
+}
+
+function shouldBlockCheckinByVerification(verification) {
+  if (EVIDENCE_VERIFICATION_MODE === "off") return false;
+  if (verification.status === "fail") return true;
+  if (EVIDENCE_VERIFICATION_MODE === "strict" && (verification.status === "warn" || verification.status === "skip")) return true;
+  return false;
+}
+
+function buildVerificationRetryStage(verification) {
+  if (verification?.alcohol?.status === "fail") return "need_meter_photo";
+  if (verification?.face?.status === "fail") return "need_face_photo";
+  return "need_location";
+}
+
+function quickReplyTypeFromStage(stage) {
+  if (stage === "need_meter_photo") return "photo_meter";
+  if (stage === "need_face_photo") return "photo_face";
+  if (stage === "need_location") return "location";
+  if (stage === "need_alcohol" || stage === "need_alcohol_manual") return "alcohol";
+  return "attendance";
+}
+
+function buildVerificationFailureMessage(verification) {
+  if (verification?.alcohol?.status === "fail") {
+    const manualValue = Number.isFinite(Number(verification?.alcohol?.manualAlcoholValue))
+      ? Number(verification?.alcohol?.manualAlcoholValue).toFixed(2)
+      : "不明";
+    const ocrValue = Number.isFinite(Number(verification?.alcohol?.extractedValue))
+      ? Number(verification?.alcohol?.extractedValue).toFixed(2)
+      : "抽出不可";
+    return `飲酒値照合で不一致が検出されました。測定器写真を再送してください。\n入力値: ${manualValue} / OCR値: ${ocrValue}`;
+  }
+  if (verification?.face?.status === "fail") {
+    const similarity = Number.isFinite(Number(verification?.face?.similarity))
+      ? `${Number(verification?.face?.similarity).toFixed(1)}%`
+      : "0.0%";
+    return `本人写真の照合に失敗しました（一致率 ${similarity}）。本人写真を再送してください。`;
+  }
+  return "証拠照合を完了できなかったため、打刻を保留しました。管理者へ連絡してください。";
+}
+
+function buildVerificationWarningMessage(verification) {
+  if (verification.status === "warn") {
+    return "※証拠照合は一部警告ありで記録しました。管理者が確認してください。";
+  }
+  if (verification.status === "skip" && EVIDENCE_VERIFICATION_MODE !== "off") {
+    return "※証拠照合をスキップして記録しました。管理者が確認してください。";
+  }
+  return "";
+}
+
+function appendAlcoholEvidence(db, entry) {
+  db.alcoholEvidence = db.alcoholEvidence || [];
+  db.alcoholEvidence.push(entry);
+  db.alcoholEvidence = db.alcoholEvidence.filter((row) => Number(row.expiresAt || 0) >= Date.now()).slice(-10000);
+}
+
+async function finalizeCheckinWithEvidence({ db, userId, employee, site, lineChannel, flow, gps }) {
+  if (!flow || flow.type !== "checkin") {
+    return {
+      ok: false,
+      message: "出勤フローが見つかりません。メニューから「出勤」を押して再開してください。",
+      quickReplyType: "attendance",
+    };
+  }
+  if (!gps || !Number.isFinite(Number(gps.lat)) || !Number.isFinite(Number(gps.lng))) {
+    return {
+      ok: false,
+      message: "位置情報が未取得です。位置情報を送信してください。",
+      quickReplyType: "location",
+    };
+  }
+
+  const mergedFlow = {
+    ...flow,
+    employee: flow.employee || employee,
+    site: flow.site || site,
+    meterEvidence: buildEvidenceReference(flow.meterEvidence, flow.meterImageId, "meter"),
+    faceEvidence: buildEvidenceReference(flow.faceEvidence, flow.faceImageId, "face"),
+  };
+  const verification = await verifyCheckinEvidence({
+    userId,
+    lineChannel,
+    flow: mergedFlow,
+  });
+  if (shouldBlockCheckinByVerification(verification)) {
+    const retryStage = buildVerificationRetryStage(verification);
+    db.lineWorkflows = db.lineWorkflows || {};
+    db.lineWorkflows[userId] = {
+      ...mergedFlow,
+      stage: retryStage,
+      updatedAt: new Date().toISOString(),
+      verification,
+    };
+    writeDb(db);
+    return {
+      ok: false,
+      message: buildVerificationFailureMessage(verification),
+      quickReplyType: quickReplyTypeFromStage(retryStage),
+    };
+  }
+
+  try {
+    const snapshot = processLineAction({
+      employee: mergedFlow.employee,
+      site: mergedFlow.site,
+      action: "checkin",
+      source: "LINE",
+      lineUserId: userId,
+      gps: { lat: Number(gps.lat), lng: Number(gps.lng) },
+      alcohol: {
+        value: Number(mergedFlow.alcoholValue || 0),
+        meterImageId: mergedFlow.meterImageId || "",
+        faceImageId: mergedFlow.faceImageId || "",
+        meterEvidence: mergedFlow.meterEvidence,
+        faceEvidence: mergedFlow.faceEvidence,
+        verification,
+        retentionDays: EVIDENCE_RETENTION_DAYS,
+      },
+    });
+    appendAlcoholEvidence(db, {
+      userId,
+      employee: mergedFlow.employee,
+      site: mergedFlow.site,
+      alcoholValue: Number(mergedFlow.alcoholValue || 0),
+      meterImageId: mergedFlow.meterImageId || "",
+      faceImageId: mergedFlow.faceImageId || "",
+      meterEvidence: mergedFlow.meterEvidence,
+      faceEvidence: mergedFlow.faceEvidence,
+      gps: { lat: Number(gps.lat), lng: Number(gps.lng) },
+      verification,
+      at: new Date().toISOString(),
+      expiresAt: Date.now() + EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    });
+    db.lineWorkflows = db.lineWorkflows || {};
+    delete db.lineWorkflows[userId];
+    writeDb(db);
+    return {
+      ok: true,
+      snapshot,
+      warningMessage: buildVerificationWarningMessage(verification),
+    };
+  } catch (error) {
+    db.lineWorkflows = db.lineWorkflows || {};
+    db.lineWorkflows[userId] = {
+      ...mergedFlow,
+      stage: "need_location",
+      updatedAt: new Date().toISOString(),
+    };
+    writeDb(db);
+    return {
+      ok: false,
+      message: String(error?.message || "打刻できませんでした。"),
+      quickReplyType: "location",
+    };
+  }
+}
+
 function buildShiftMessageForEmployee(db, targetDate, employeeName) {
   const plans = Array.isArray(db.shiftPlans) ? db.shiftPlans : [];
   const userPlans = plans.filter((p) => p.date === targetDate && p.employee === employeeName);
@@ -2159,25 +2889,7 @@ function appendShiftDeliveryHistory(db, entry) {
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) {
-    writeDb({
-      checkins: {},
-      lineSync: null,
-      logs: [],
-      timecards: [],
-      userMap: {},
-      lineUsersSeen: {},
-      shiftPlans: [],
-      shiftDelivery: null,
-      shiftDeliveryHistory: [],
-      pendingActionConfirm: {},
-      lineWorkflows: {},
-      lastLocations: {},
-      lineCorrectionRequests: [],
-      alcoholEvidence: [],
-      employeeRules: {},
-      attendancePolicy: { ...DEFAULT_ATTENDANCE_POLICY },
-      alcoholLimit: normalizeAlcoholLimit(DEFAULT_ALCOHOL_LIMIT),
-    });
+    writeDb(createEmptyDb(), { skipRemoteSync: true });
   }
 }
 
@@ -2185,30 +2897,18 @@ function readDb() {
   try {
     const raw = fs.readFileSync(DB_FILE, "utf8");
     const parsed = safeJsonParse(raw, null);
-    if (parsed && typeof parsed === "object") {
-      parsed.checkins = parsed.checkins || {};
-      parsed.logs = Array.isArray(parsed.logs) ? parsed.logs : [];
-      parsed.timecards = Array.isArray(parsed.timecards) ? parsed.timecards : [];
-      parsed.userMap = parsed.userMap || {};
-      parsed.lineUsersSeen = parsed.lineUsersSeen || {};
-      parsed.shiftPlans = Array.isArray(parsed.shiftPlans) ? parsed.shiftPlans : [];
-      parsed.shiftDelivery = parsed.shiftDelivery || null;
-      parsed.shiftDeliveryHistory = Array.isArray(parsed.shiftDeliveryHistory) ? parsed.shiftDeliveryHistory : [];
-      parsed.pendingActionConfirm = parsed.pendingActionConfirm || {};
-      parsed.lineWorkflows = parsed.lineWorkflows || {};
-      parsed.lastLocations = parsed.lastLocations || {};
-      parsed.lineCorrectionRequests = Array.isArray(parsed.lineCorrectionRequests) ? parsed.lineCorrectionRequests : [];
-      parsed.alcoholEvidence = Array.isArray(parsed.alcoholEvidence) ? parsed.alcoholEvidence : [];
-      parsed.employeeRules = parsed.employeeRules || {};
-      parsed.attendancePolicy = normalizeAttendancePolicy(parsed.attendancePolicy);
-      parsed.alcoholLimit = normalizeAlcoholLimit(parsed.alcoholLimit);
-      parsed.timecards = parsed.timecards.map((row) => ({
-        ...row,
-        sourceKey: row.sourceKey || buildTimecardSourceKey(row),
-      }));
-      return parsed;
-    }
+    if (parsed && typeof parsed === "object") return hydrateDbShape(parsed);
   } catch (_e) {}
+  return createEmptyDb();
+}
+
+function writeDb(data, options = {}) {
+  const normalized = hydrateDbShape(data);
+  fs.writeFileSync(DB_FILE, JSON.stringify(normalized, null, 2), "utf8");
+  if (!options.skipRemoteSync) enqueueRemoteStateSync(normalized);
+}
+
+function createEmptyDb() {
   return {
     checkins: {},
     lineSync: null,
@@ -2230,8 +2930,31 @@ function readDb() {
   };
 }
 
-function writeDb(data) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
+function hydrateDbShape(input) {
+  const parsed = input && typeof input === "object" ? input : {};
+  const out = createEmptyDb();
+  out.checkins = parsed.checkins || {};
+  out.lineSync = parsed.lineSync || null;
+  out.logs = Array.isArray(parsed.logs) ? parsed.logs : [];
+  out.timecards = Array.isArray(parsed.timecards) ? parsed.timecards : [];
+  out.userMap = parsed.userMap || {};
+  out.lineUsersSeen = parsed.lineUsersSeen || {};
+  out.shiftPlans = Array.isArray(parsed.shiftPlans) ? parsed.shiftPlans : [];
+  out.shiftDelivery = parsed.shiftDelivery || null;
+  out.shiftDeliveryHistory = Array.isArray(parsed.shiftDeliveryHistory) ? parsed.shiftDeliveryHistory : [];
+  out.pendingActionConfirm = parsed.pendingActionConfirm || {};
+  out.lineWorkflows = parsed.lineWorkflows || {};
+  out.lastLocations = parsed.lastLocations || {};
+  out.lineCorrectionRequests = Array.isArray(parsed.lineCorrectionRequests) ? parsed.lineCorrectionRequests : [];
+  out.alcoholEvidence = Array.isArray(parsed.alcoholEvidence) ? parsed.alcoholEvidence : [];
+  out.employeeRules = parsed.employeeRules || {};
+  out.attendancePolicy = normalizeAttendancePolicy(parsed.attendancePolicy);
+  out.alcoholLimit = normalizeAlcoholLimit(parsed.alcoholLimit);
+  out.timecards = out.timecards.map((row) => ({
+    ...row,
+    sourceKey: row.sourceKey || buildTimecardSourceKey(row),
+  }));
+  return out;
 }
 
 function safeJsonParse(text, fallback) {
@@ -2240,6 +2963,38 @@ function safeJsonParse(text, fallback) {
   } catch (_e) {
     return fallback;
   }
+}
+
+function deepCloneJson(value) {
+  return safeJsonParse(JSON.stringify(value), value);
+}
+
+function parseBooleanEnv(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const text = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(text)) return true;
+  if (["0", "false", "no", "off"].includes(text)) return false;
+  return fallback;
+}
+
+function clampDecimal(value, fallback, min, max) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, Number(num.toFixed(3))));
+}
+
+function clampPercent(value, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(100, Math.max(1, Number(num.toFixed(1))));
+}
+
+function normalizeEvidenceVerificationMode(value) {
+  const mode = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (mode === "off" || mode === "warn" || mode === "strict") return mode;
+  return "warn";
 }
 
 function isValidHHMM(text) {
