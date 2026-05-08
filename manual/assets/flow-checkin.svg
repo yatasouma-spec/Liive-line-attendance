@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 360" role="img" aria-label="出勤操作フロー">
+  <defs>
+    <style>
+      .bg{fill:#f7fbff}.card{fill:#fff;stroke:#cfe0f2;stroke-width:2}.num{fill:#0053a6}.title{font:700 28px sans-serif;fill:#142033}.txt{font:500 20px sans-serif;fill:#53657c}.arrow{stroke:#00a97f;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;fill:none}.icon{font:700 44px sans-serif;fill:#0053a6}
+    </style>
+  </defs>
+  <rect class="bg" width="1120" height="360" rx="26"/>
+  <g transform="translate(35 45)">
+    <rect class="card" width="220" height="250" rx="22"/>
+    <circle class="num" cx="36" cy="38" r="22"/><text x="29" y="47" font-size="24" font-weight="700" fill="#fff">1</text>
+    <text class="icon" x="82" y="92">出</text><text class="title" x="38" y="145">出勤を押す</text><text class="txt" x="38" y="186">確認が出たら</text><text class="txt" x="38" y="216">出勤確定</text>
+  </g>
+  <path class="arrow" d="M285 170h70m-20-20 20 20-20 20"/>
+  <g transform="translate(385 45)">
+    <rect class="card" width="220" height="250" rx="22"/>
+    <circle class="num" cx="36" cy="38" r="22"/><text x="29" y="47" font-size="24" font-weight="700" fill="#fff">2</text>
+    <text class="icon" x="75" y="92">写</text><text class="title" x="38" y="145">写真を送る</text><text class="txt" x="38" y="186">測定器写真</text><text class="txt" x="38" y="216">本人写真</text>
+  </g>
+  <path class="arrow" d="M635 170h70m-20-20 20 20-20 20"/>
+  <g transform="translate(735 45)">
+    <rect class="card" width="220" height="250" rx="22"/>
+    <circle class="num" cx="36" cy="38" r="22"/><text x="29" y="47" font-size="24" font-weight="700" fill="#fff">3</text>
+    <text class="icon" x="78" y="92">地</text><text class="title" x="38" y="145">位置情報</text><text class="txt" x="38" y="186">現在地を</text><text class="txt" x="38" y="216">送信</text>
+  </g>
+  <path class="arrow" d="M965 170h55m-20-20 20 20-20 20"/>
+  <g transform="translate(1020 105)">
+    <circle cx="50" cy="65" r="48" fill="#dff8ee" stroke="#00a97f" stroke-width="4"/><text x="23" y="78" font-size="42" font-weight="900" fill="#008a67">完</text>
+    <text x="5" y="142" font-size="18" font-weight="700" fill="#142033">受付完了</text>
+  </g>
+</svg>

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Liive 勤怠ツール 社員マニュアル</title>
+    <meta
+      name="description"
+      content="Liive公式LINE勤怠ツールの社員向けマニュアル。出勤、退勤、シフト確認、修正依頼、写真送信、位置情報送信をわかりやすく確認できます。"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./manual.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero-inner">
+        <p class="hero-eyebrow">Liive 公式LINE 勤怠</p>
+        <h1>社員さん向け<br />かんたん操作マニュアル</h1>
+        <p class="hero-lead">
+          出勤・退勤・シフト確認・修正依頼を、LINEだけで迷わず使えるようにまとめています。
+        </p>
+        <div class="hero-badges" aria-label="使えるボタン">
+          <span>出勤</span>
+          <span>退勤</span>
+          <span>シフト確認</span>
+          <span>修正依頼</span>
+          <span>マニュアル確認</span>
+          <span class="is-muted">日報は準備中</span>
+        </div>
+        <a class="hero-cta" href="#quick-start">まず見るところへ</a>
+      </div>
+    </header>
+
+    <main class="page">
+      <section id="quick-start" class="panel important">
+        <p class="section-label">最初に覚えること</p>
+        <h2>基本は「ボタンを押す → LINEの案内通りに送る」だけ</h2>
+        <div class="quick-grid">
+          <article>
+            <span class="step-num">1</span>
+            <h3>出勤</h3>
+            <p>出勤ボタンを押します。確認が出たら「出勤確定」を押してください。</p>
+          </article>
+          <article>
+            <span class="step-num">2</span>
+            <h3>写真を送る</h3>
+            <p>飲酒チェック対象の方は測定器写真、続けて本人写真を送ります。</p>
+          </article>
+          <article>
+            <span class="step-num">3</span>
+            <h3>位置情報を送る</h3>
+            <p>LINEの案内に従って、現在地を送ります。登録地点と照合されます。</p>
+          </article>
+          <article>
+            <span class="step-num">4</span>
+            <h3>完了メッセージを確認</h3>
+            <p>「受け付けました」と表示されたら打刻完了です。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel visual">
+        <div class="visual-head">
+          <p class="section-label">画面イメージ</p>
+          <h2>LINEの下にあるメニューから操作します</h2>
+          <p>大きいボタンなので、スマホ操作が苦手な方でも押しやすい作りです。</p>
+        </div>
+        <div class="visual-body">
+          <figure class="phone">
+            <img src="./assets/line-menu-sample.png" alt="Liive公式LINEの勤怠メニュー画面" />
+            <figcaption>実際のLINEメニュー例</figcaption>
+          </figure>
+          <div class="callout-stack">
+            <article class="callout-blue">
+              <h3>出勤・退勤</h3>
+              <p>勤務開始と終了の時に押します。押し間違えた場合は「修正依頼」を使います。</p>
+            </article>
+            <article class="callout-orange">
+              <h3>シフト確認</h3>
+              <p>自分のシフトを確認できます。管理者から配信された内容もLINEに届きます。</p>
+            </article>
+            <article class="callout-green">
+              <h3>マニュアル確認</h3>
+              <p>このページをいつでも開けます。使い方を忘れた時に見てください。</p>
+            </article>
+            <article class="callout-gray">
+              <h3>日報</h3>
+              <p>現在は準備中です。案内があるまでは使わなくて大丈夫です。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel flow">
+        <p class="section-label">図解</p>
+        <h2>出勤の流れ</h2>
+        <p class="flow-lead">途中で止まったら、LINEに表示された案内を上から順番に進めてください。</p>
+        <img src="./assets/flow-checkin.svg" alt="出勤操作の流れ" class="flow-image" />
+      </section>
+
+      <section class="panel flow">
+        <p class="section-label">図解</p>
+        <h2>退勤・シフト確認・修正依頼</h2>
+        <img src="./assets/flow-others.svg" alt="退勤、シフト確認、修正依頼の流れ" class="flow-image" />
+      </section>
+
+      <section class="panel cards">
+        <p class="section-label">よくある場面</p>
+        <h2>困った時はここを見てください</h2>
+        <div class="faq-grid">
+          <article>
+            <h3>写真を送ってと言われた</h3>
+            <p>LINE下部のカメラから、その場で撮影して送ってください。</p>
+          </article>
+          <article>
+            <h3>位置情報を送ってと言われた</h3>
+            <p>LINEの「＋」から位置情報を選び、現在地を送信してください。</p>
+          </article>
+          <article>
+            <h3>押し間違えた</h3>
+            <p>「修正依頼」を押して、管理者に修正内容を送ってください。</p>
+          </article>
+          <article>
+            <h3>メニューが見えない</h3>
+            <p>トークに「メニュー」と送ると、操作ボタンを再表示できます。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel howto">
+        <p class="section-label">マニュアルの開き方</p>
+        <h2>LINEからすぐ確認できます</h2>
+        <ol>
+          <li>トーク画面下の「マニュアル確認」を押す</li>
+          <li>届いたURLを押す</li>
+          <li>このページを見ながら操作する</li>
+        </ol>
+        <p class="howto-tip">補足: トークに「マニュアル」「使い方」「ヘルプ」と送っても開けます。</p>
+      </section>
+    </main>
+  </body>
+</html>

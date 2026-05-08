@@ -1,0 +1,296 @@
+:root {
+  --bg: #f3f7fb;
+  --ink: #122033;
+  --muted: #52667f;
+  --panel: #ffffff;
+  --line: #d7e3f0;
+  --blue: #0053a6;
+  --blue-soft: #e8f2ff;
+  --green: #00a97f;
+  --green-soft: #e5f8f1;
+  --orange: #ff9742;
+  --orange-soft: #fff0df;
+  --red: #e94f65;
+  --gray-soft: #eef2f7;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 15% 0%, #d9ecff 0%, transparent 42%),
+    radial-gradient(circle at 90% 5%, #dff8ef 0%, transparent 34%),
+    var(--bg);
+  line-height: 1.72;
+}
+
+.hero {
+  color: #fff;
+  background:
+    linear-gradient(135deg, rgba(0, 83, 166, 0.94), rgba(0, 130, 170, 0.96)),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.08) 0 10px, transparent 10px 20px);
+}
+
+.hero-inner {
+  width: min(1100px, 92vw);
+  margin: 0 auto;
+  padding: clamp(32px, 6vw, 62px) 0 clamp(34px, 6vw, 58px);
+}
+
+.hero-eyebrow,
+.section-label {
+  margin: 0 0 8px;
+  font-size: 0.84rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: var(--blue);
+}
+
+.hero-eyebrow {
+  color: #bde7ff;
+}
+
+.hero h1 {
+  margin: 0 0 12px;
+  font-size: clamp(2rem, 6vw, 3.2rem);
+  line-height: 1.18;
+  letter-spacing: 0.02em;
+}
+
+.hero-lead {
+  max-width: 760px;
+  margin: 0;
+  font-size: clamp(1rem, 2.4vw, 1.2rem);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.hero-badges span {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 13px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 900;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.hero-badges .is-muted {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.hero-cta {
+  display: inline-block;
+  margin-top: 22px;
+  padding: 12px 18px;
+  font-weight: 900;
+  color: #0b2e5f;
+  background: #fff59a;
+  border-radius: 14px;
+  text-decoration: none;
+}
+
+.page {
+  width: min(1100px, 92vw);
+  margin: 22px auto 44px;
+  display: grid;
+  gap: 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: clamp(16px, 3.4vw, 28px);
+  box-shadow: 0 12px 32px rgba(18, 44, 88, 0.08);
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: clamp(1.28rem, 3.4vw, 1.75rem);
+  line-height: 1.35;
+}
+
+.panel p {
+  color: var(--muted);
+}
+
+.important {
+  border-left: 8px solid var(--green);
+}
+
+.quick-grid,
+.faq-grid {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.quick-grid article,
+.faq-grid article {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  background: linear-gradient(180deg, #ffffff, #f9fcff);
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 10px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: #fff;
+  font-weight: 900;
+}
+
+.quick-grid h3,
+.faq-grid h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.quick-grid p,
+.faq-grid p {
+  margin: 8px 0 0;
+  font-size: 0.98rem;
+}
+
+.visual-head p,
+.flow-lead {
+  margin: 8px 0 0;
+}
+
+.visual-body {
+  margin-top: 16px;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(250px, 430px) 1fr;
+  align-items: start;
+}
+
+.phone {
+  margin: 0;
+}
+
+.phone img {
+  width: 100%;
+  display: block;
+  border-radius: 22px;
+  border: 3px solid #d7e3f3;
+  box-shadow: 0 16px 42px rgba(10, 41, 91, 0.22);
+}
+
+.phone figcaption {
+  margin-top: 8px;
+  font-size: 0.9rem;
+  color: #5b6e89;
+}
+
+.callout-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.callout-stack article {
+  border-radius: 16px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  background: #fbfdff;
+}
+
+.callout-stack h3 {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.callout-stack p {
+  margin: 6px 0 0;
+  font-size: 0.98rem;
+}
+
+.callout-blue { border-left: 8px solid var(--blue) !important; }
+.callout-orange { border-left: 8px solid var(--orange) !important; }
+.callout-green { border-left: 8px solid var(--green) !important; }
+.callout-gray { border-left: 8px solid #9aa9ba !important; }
+
+.flow-image {
+  margin-top: 16px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.howto ol {
+  margin: 12px 0 0;
+  padding-left: 24px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.howto li + li {
+  margin-top: 8px;
+}
+
+.howto-tip {
+  margin: 12px 0 0;
+  color: #234f9e;
+  font-weight: 900;
+}
+
+@media (max-width: 900px) {
+  .visual-body {
+    grid-template-columns: 1fr;
+  }
+
+  .phone {
+    max-width: 460px;
+  }
+}
+
+@media (max-width: 540px) {
+  .hero-inner,
+  .page {
+    width: min(1120px, 94vw);
+  }
+
+  .panel {
+    border-radius: 16px;
+    padding: 15px;
+  }
+
+  .hero-badges {
+    gap: 8px;
+  }
+
+  .hero-badges span {
+    font-size: 0.82rem;
+    padding: 6px 10px;
+  }
+}

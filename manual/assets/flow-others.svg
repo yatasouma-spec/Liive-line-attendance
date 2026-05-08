@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 300" role="img" aria-label="退勤、シフト確認、修正依頼の説明図">
+  <defs>
+    <style>
+      .bg{fill:#fffdf7}.card{fill:#fff;stroke:#eadbc7;stroke-width:2}.head{font:800 30px sans-serif;fill:#142033}.txt{font:500 21px sans-serif;fill:#53657c}.pill{font:800 24px sans-serif;fill:#fff}.blue{fill:#0053a6}.red{fill:#e94f65}.orange{fill:#ff8b2b}.green{fill:#00a97f}
+    </style>
+  </defs>
+  <rect class="bg" width="1120" height="300" rx="24"/>
+  <g transform="translate(36 44)">
+    <rect class="card" width="310" height="210" rx="22"/>
+    <rect class="red" x="26" y="26" width="104" height="52" rx="14"/><text class="pill" x="54" y="60">退勤</text>
+    <text class="head" x="26" y="125">仕事が終わったら</text>
+    <text class="txt" x="26" y="166">退勤ボタン → 確定で完了</text>
+  </g>
+  <g transform="translate(405 44)">
+    <rect class="card" width="310" height="210" rx="22"/>
+    <rect class="orange" x="26" y="26" width="145" height="52" rx="14"/><text class="pill" x="45" y="60">シフト確認</text>
+    <text class="head" x="26" y="125">予定を確認</text>
+    <text class="txt" x="26" y="166">明日・週間・月間を確認</text>
+  </g>
+  <g transform="translate(774 44)">
+    <rect class="card" width="310" height="210" rx="22"/>
+    <rect class="green" x="26" y="26" width="130" height="52" rx="14"/><text class="pill" x="45" y="60">修正依頼</text>
+    <text class="head" x="26" y="125">押し間違えた時</text>
+    <text class="txt" x="26" y="166">管理者へ修正を依頼</text>
+  </g>
+</svg>

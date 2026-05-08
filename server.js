@@ -30,6 +30,8 @@ const LINE_CHANNELS = [
   },
 ];
 const LINE_USER_MAP = safeJsonParse(process.env.LINE_USER_MAP_JSON, {});
+const MANUAL_PUBLIC_URL = String(process.env.MANUAL_PUBLIC_URL || "").trim();
+const MANUAL_PAGE_PATH = normalizeManualPath(process.env.MANUAL_PAGE_PATH || "/manual/index.html");
 const APP_TIMEZONE = "Asia/Tokyo";
 const SHIFT_AUTO_SEND_HOUR = Number(process.env.SHIFT_AUTO_SEND_HOUR || 18);
 const SHIFT_AUTO_SEND_MINUTE = Number(process.env.SHIFT_AUTO_SEND_MINUTE || 0);
@@ -55,10 +57,15 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
     return res.status(401).json({ ok: false, error: "invalid signature" });
   }
 
+  const manualUrl = resolveManualUrlFromRequest(req);
   const payload = safeJsonParse(body.toString("utf8"), { events: [] });
   for (const event of payload.events || []) {
     const replyToEvent = (messageText, options = {}) =>
-      sendLineReply(event.replyToken, messageText, { ...options, channel: inboundChannelId });
+      sendLineReply(event.replyToken, messageText, {
+        ...options,
+        channel: inboundChannelId,
+        manualUrl: options.manualUrl || manualUrl,
+      });
     const userId = event.source?.userId || "unknown";
     const text = (event.message?.text || "").trim();
     const dbForUser = readDb();
@@ -190,6 +197,25 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
 
     if (text === "メニュー" || text === "menu") {
       await replyToEvent("勤怠メニューです。ボタンを押してください。", { withQuickReply: true });
+      continue;
+    }
+    if (isManualCommand(text)) {
+      await replyToEvent(buildManualGuideMessage(manualUrl), {
+        withQuickReply: true,
+        quickReplyType: "manual",
+        manualUrl,
+      });
+      continue;
+    }
+    if (isDailyReportCommand(text)) {
+      await replyToEvent(
+        "日報機能は現在準備中です。先行して勤怠打刻とシフト確認をご利用ください。\nマニュアルは「マニュアル確認」から開けます。",
+        {
+          withQuickReply: true,
+          quickReplyType: "manual",
+          manualUrl,
+        }
+      );
       continue;
     }
     if (text.includes("明日シフト確認") || text.includes("シフト確認")) {
@@ -846,6 +872,77 @@ function actionLabel(action) {
   return action;
 }
 
+function normalizeManualPath(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "/manual/index.html";
+  return raw.startsWith("/") ? raw : `/${raw}`;
+}
+
+function isHttpUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch (_e) {
+    return false;
+  }
+}
+
+function resolveRequestOrigin(req) {
+  const protoHeader = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+  const hostHeader = String(req.get("x-forwarded-host") || req.get("host") || "").split(",")[0].trim();
+  const proto = protoHeader || (req.secure ? "https" : "http");
+  if (!hostHeader || !proto) return "";
+  return `${proto}://${hostHeader}`;
+}
+
+function resolveManualUrlFromRequest(req) {
+  if (isHttpUrl(MANUAL_PUBLIC_URL)) return MANUAL_PUBLIC_URL;
+  const origin = resolveRequestOrigin(req);
+  if (!origin) return "";
+  return `${origin}${MANUAL_PAGE_PATH}`;
+}
+
+function isManualCommand(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("マニュアル") ||
+    normalized.includes("使い方") ||
+    normalized.includes("ヘルプ") ||
+    normalized === "manual" ||
+    normalized === "help"
+  );
+}
+
+function isDailyReportCommand(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes("日報") || normalized.includes("daily report");
+}
+
+function buildManualGuideMessage(manualUrl = "") {
+  const lines = [
+    "【Liive 勤怠マニュアル】",
+    "社員向けの使い方ガイドです。",
+    "",
+    "確認できる内容",
+    "・出勤/退勤のやり方",
+    "・写真/位置情報の送り方",
+    "・シフト確認",
+    "・修正依頼",
+  ];
+  if (isHttpUrl(manualUrl)) {
+    lines.push("", "下のURLから開けます。");
+    lines.push(manualUrl);
+  } else {
+    lines.push("公開URLが未設定です。管理者に `MANUAL_PUBLIC_URL` の設定を依頼してください。");
+  }
+  lines.push("", "※日報機能は現在準備中です。");
+  return lines.join("\n");
+}
+
 function extractPlaceNameFromMapsUrl(urlText) {
   const text = String(urlText || "").trim();
   if (!text) return "";
@@ -1451,7 +1548,20 @@ function getLineChannelConfig(channel) {
   return fallback || exact || LINE_CHANNELS[0] || { id: "primary", label: "LINE", secret: "", accessToken: "" };
 }
 
-function getAttendanceQuickReplyItems() {
+function buildManualQuickReplyItem(manualUrl = "") {
+  if (isHttpUrl(manualUrl)) {
+    return {
+      type: "action",
+      action: { type: "uri", label: "マニュアル", uri: manualUrl },
+    };
+  }
+  return {
+    type: "action",
+    action: { type: "message", label: "マニュアル", text: "マニュアル確認" },
+  };
+}
+
+function getAttendanceQuickReplyItems(manualUrl = "") {
   return [
     {
       type: "action",
@@ -1469,10 +1579,15 @@ function getAttendanceQuickReplyItems() {
       type: "action",
       action: { type: "message", label: "修正依頼", text: "修正依頼 退勤取消" },
     },
+    {
+      type: "action",
+      action: { type: "message", label: "日報", text: "日報" },
+    },
+    buildManualQuickReplyItem(manualUrl),
   ];
 }
 
-function getConfirmQuickReplyItems(action) {
+function getConfirmQuickReplyItems(action, manualUrl = "") {
   const label = actionLabel(action);
   return [
     {
@@ -1491,10 +1606,11 @@ function getConfirmQuickReplyItems(action) {
       type: "action",
       action: { type: "message", label: "修正依頼", text: "修正依頼 退勤取消" },
     },
+    buildManualQuickReplyItem(manualUrl),
   ];
 }
 
-function getAlcoholQuickReplyItems() {
+function getAlcoholQuickReplyItems(manualUrl = "") {
   return [
     {
       type: "action",
@@ -1516,10 +1632,11 @@ function getAlcoholQuickReplyItems() {
       type: "action",
       action: { type: "message", label: "その他", text: "ALC その他" },
     },
+    buildManualQuickReplyItem(manualUrl),
   ];
 }
 
-function getPhotoQuickReplyItems(kind = "meter") {
+function getPhotoQuickReplyItems(kind = "meter", manualUrl = "") {
   const title = kind === "face" ? "本人写真" : "測定器写真";
   return [
     {
@@ -1530,10 +1647,11 @@ function getPhotoQuickReplyItems(kind = "meter") {
       type: "action",
       action: { type: "message", label: "メニュー", text: "メニュー" },
     },
+    buildManualQuickReplyItem(manualUrl),
   ];
 }
 
-function getLocationQuickReplyItems() {
+function getLocationQuickReplyItems(manualUrl = "") {
   return [
     {
       type: "action",
@@ -1542,6 +1660,33 @@ function getLocationQuickReplyItems() {
     {
       type: "action",
       action: { type: "message", label: "メニュー", text: "メニュー" },
+    },
+    buildManualQuickReplyItem(manualUrl),
+  ];
+}
+
+function getManualQuickReplyItems(manualUrl = "") {
+  return [
+    buildManualQuickReplyItem(manualUrl),
+    {
+      type: "action",
+      action: { type: "message", label: "出勤", text: "出勤" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "退勤", text: "退勤" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "シフト確認", text: "シフト確認" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "日報", text: "日報" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "修正依頼", text: "修正依頼 退勤取消" },
     },
   ];
 }
@@ -1553,12 +1698,14 @@ async function sendLineReply(replyToken, text, options = {}) {
   const message = { type: "text", text };
   if (options.withQuickReply) {
     const type = options.quickReplyType || "attendance";
-    let items = getAttendanceQuickReplyItems();
-    if (type === "alcohol") items = getAlcoholQuickReplyItems();
-    if (type === "confirm") items = getConfirmQuickReplyItems(options.confirmAction || "checkin");
-    if (type === "photo_meter") items = getPhotoQuickReplyItems("meter");
-    if (type === "photo_face") items = getPhotoQuickReplyItems("face");
-    if (type === "location") items = getLocationQuickReplyItems();
+    const manualUrl = String(options.manualUrl || "");
+    let items = getAttendanceQuickReplyItems(manualUrl);
+    if (type === "alcohol") items = getAlcoholQuickReplyItems(manualUrl);
+    if (type === "confirm") items = getConfirmQuickReplyItems(options.confirmAction || "checkin", manualUrl);
+    if (type === "photo_meter") items = getPhotoQuickReplyItems("meter", manualUrl);
+    if (type === "photo_face") items = getPhotoQuickReplyItems("face", manualUrl);
+    if (type === "location") items = getLocationQuickReplyItems(manualUrl);
+    if (type === "manual") items = getManualQuickReplyItems(manualUrl);
     message.quickReply = {
       items,
     };
