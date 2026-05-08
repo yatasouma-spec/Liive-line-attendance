@@ -76,6 +76,15 @@ open "http://localhost:3000/index.html"
 - `ADMIN_SESSION_SECRET`（推奨）
 - `ADMIN_SESSION_TTL_HOURS`（任意: 既定 `12`）
 
+### 5-5. 日次バックアップ
+- `BACKUP_ENABLED=true`
+- `BACKUP_HOUR_JST`（任意: 既定 `3`）
+- `BACKUP_MINUTE_JST`（任意: 既定 `15`）
+- `BACKUP_RETENTION_DAYS`（任意: 既定 `30`）
+- `BACKUP_SUPABASE_UPLOAD=true`（任意）
+- `BACKUP_SUPABASE_BUCKET`（任意: 未指定なら `SUPABASE_STORAGE_BUCKET` を利用）
+- `BACKUP_SUPABASE_PREFIX`（任意: 既定 `backups`）
+
 ### LINE_USER_MAP_JSON 例
 ```json
 {
@@ -114,6 +123,7 @@ open "http://localhost:3000/index.html"
 - HTTPSドメインで公開されている
 - `/api/health` が200で返る
 - `/api/system/persistence-status` が200で、設定値が想定どおり
+- `/api/system/backup-status` が200で、スケジュール・最終実行が確認できる
 - `ADMIN_AUTH_ENABLED=true` の場合:
   - `/api/bootstrap` を未認証で叩くと 401
   - `/api/auth/login` でトークン発行できる

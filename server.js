@@ -70,6 +70,14 @@ const ADMIN_SESSION_SECRET =
     .trim() || "liive-admin-session";
 const ADMIN_SESSION_TTL_HOURS = Math.min(168, Math.max(1, Number(process.env.ADMIN_SESSION_TTL_HOURS || 12)));
 const ADMIN_AUTH_EXEMPT_PATHS = new Set(["/health", "/auth/config", "/auth/login"]);
+const BACKUP_ENABLED = parseBooleanEnv(process.env.BACKUP_ENABLED, false);
+const BACKUP_HOUR_JST = Math.min(23, Math.max(0, Number(process.env.BACKUP_HOUR_JST || 3)));
+const BACKUP_MINUTE_JST = Math.min(59, Math.max(0, Number(process.env.BACKUP_MINUTE_JST || 15)));
+const BACKUP_RETENTION_DAYS = Math.min(3650, Math.max(1, Number(process.env.BACKUP_RETENTION_DAYS || 30)));
+const BACKUP_DIR = path.join(DATA_DIR, "backups");
+const BACKUP_SUPABASE_UPLOAD = parseBooleanEnv(process.env.BACKUP_SUPABASE_UPLOAD, false);
+const BACKUP_SUPABASE_BUCKET = String(process.env.BACKUP_SUPABASE_BUCKET || SUPABASE_STORAGE_BUCKET || "").trim();
+const BACKUP_SUPABASE_PREFIX = String(process.env.BACKUP_SUPABASE_PREFIX || "backups").trim() || "backups";
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -87,9 +95,20 @@ const remoteStateSync = {
   lastWarning: "",
   bootstrappedAt: null,
 };
+const backupState = {
+  inFlight: false,
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  lastLocalFile: "",
+  lastRemotePath: "",
+  lastError: "",
+  lastSkippedReason: "",
+  lastRunDateJst: "",
+};
 
 ensureDataFile();
 await initializeExternalPersistence();
+initializeBackupDirectory();
 
 app.post("/line/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const body = req.body;
@@ -522,6 +541,26 @@ app.use("/api", (req, res, next) => {
 
 app.get("/api/system/persistence-status", (_req, res) => {
   res.json(buildPersistenceStatus());
+});
+
+app.get("/api/system/backup-status", (_req, res) => {
+  res.json(buildBackupStatus());
+});
+
+app.post("/api/system/backup-now", async (_req, res) => {
+  const result = await runDailyBackup({ reason: "manual_api" });
+  if (!result.ok) {
+    return res.status(500).json({
+      ok: false,
+      error: result.error || "backup failed",
+      status: buildBackupStatus(),
+    });
+  }
+  return res.json({
+    ok: true,
+    result,
+    status: buildBackupStatus(),
+  });
 });
 
 app.get("/api/bootstrap", (_req, res) => {
@@ -1001,6 +1040,10 @@ setInterval(() => {
   if (!supabase || !remoteStateSync.pending) return;
   drainRemoteStateSync().catch(() => {});
 }, 30 * 1000);
+
+setInterval(() => {
+  runScheduledBackup().catch(() => {});
+}, 60 * 1000);
 
 function detectAction(text) {
   if (text.includes("出勤")) return "checkin";
@@ -1914,7 +1957,157 @@ function buildPersistenceStatus() {
       sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
       passwordConfigured: Boolean(ADMIN_LOGIN_PASSWORD),
     },
+    backup: {
+      enabled: BACKUP_ENABLED,
+      schedule: `${String(BACKUP_HOUR_JST).padStart(2, "0")}:${String(BACKUP_MINUTE_JST).padStart(2, "0")} JST`,
+      retentionDays: BACKUP_RETENTION_DAYS,
+      lastSuccessAt: backupState.lastSuccessAt,
+      lastError: backupState.lastError,
+    },
   };
+}
+
+function buildBackupStatus() {
+  return {
+    ok: true,
+    enabled: BACKUP_ENABLED,
+    scheduleJst: {
+      hour: BACKUP_HOUR_JST,
+      minute: BACKUP_MINUTE_JST,
+    },
+    retentionDays: BACKUP_RETENTION_DAYS,
+    local: {
+      dir: BACKUP_DIR,
+      lastFile: backupState.lastLocalFile,
+    },
+    remote: {
+      enabled: BACKUP_SUPABASE_UPLOAD,
+      bucket: BACKUP_SUPABASE_BUCKET,
+      prefix: BACKUP_SUPABASE_PREFIX,
+      lastPath: backupState.lastRemotePath,
+    },
+    state: {
+      inFlight: backupState.inFlight,
+      lastAttemptAt: backupState.lastAttemptAt,
+      lastSuccessAt: backupState.lastSuccessAt,
+      lastRunDateJst: backupState.lastRunDateJst,
+      lastError: backupState.lastError,
+      lastSkippedReason: backupState.lastSkippedReason,
+    },
+  };
+}
+
+function initializeBackupDirectory() {
+  if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+}
+
+async function runScheduledBackup() {
+  if (!BACKUP_ENABLED) return;
+  const now = getJstNowParts();
+  if (now.hour !== BACKUP_HOUR_JST || now.minute !== BACKUP_MINUTE_JST) return;
+  if (backupState.lastRunDateJst === now.date) return;
+  const result = await runDailyBackup({ reason: "auto_schedule" });
+  if (result.ok) {
+    backupState.lastRunDateJst = now.date;
+  }
+}
+
+async function runDailyBackup({ reason = "manual" } = {}) {
+  if (backupState.inFlight) {
+    return { ok: false, error: "backup already running" };
+  }
+  backupState.inFlight = true;
+  backupState.lastAttemptAt = new Date().toISOString();
+  backupState.lastSkippedReason = "";
+  try {
+    initializeBackupDirectory();
+    const now = new Date();
+    const nowJst = toJstParts(now);
+    const dateKey = String(nowJst.date || "").replace(/-/g, "");
+    const timeKey = String(nowJst.time || "00:00").replace(":", "");
+    const fileName = `liive-backup-${sanitizePathToken(APP_TENANT_ID)}-${dateKey}-${timeKey}.json`;
+    const localFile = path.join(BACKUP_DIR, fileName);
+    const db = readDb();
+    const backupBody = {
+      tenantId: APP_TENANT_ID,
+      reason: String(reason || ""),
+      createdAt: now.toISOString(),
+      createdAtJst: `${nowJst.date}T${nowJst.time}:00+09:00`,
+      service: "liive-line-attendance",
+      data: db,
+    };
+    fs.writeFileSync(localFile, JSON.stringify(backupBody, null, 2), "utf8");
+    backupState.lastLocalFile = localFile;
+
+    let remotePath = "";
+    if (BACKUP_SUPABASE_UPLOAD) {
+      const upload = await uploadBackupToSupabase(localFile, backupBody, { dateKey });
+      if (!upload.ok) {
+        throw new Error(upload.error || "backup upload failed");
+      }
+      remotePath = upload.path || "";
+      backupState.lastRemotePath = remotePath;
+    }
+
+    cleanupLocalBackups();
+    backupState.lastSuccessAt = new Date().toISOString();
+    backupState.lastError = "";
+    return {
+      ok: true,
+      fileName,
+      localFile,
+      remotePath,
+    };
+  } catch (error) {
+    backupState.lastError = String(error?.message || error);
+    return { ok: false, error: backupState.lastError };
+  } finally {
+    backupState.inFlight = false;
+  }
+}
+
+function cleanupLocalBackups() {
+  try {
+    initializeBackupDirectory();
+    const files = fs.readdirSync(BACKUP_DIR, { withFileTypes: true });
+    const thresholdMs = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    files.forEach((entry) => {
+      if (!entry.isFile()) return;
+      const fullPath = path.join(BACKUP_DIR, entry.name);
+      const stat = fs.statSync(fullPath);
+      if (Number(stat.mtimeMs || 0) < thresholdMs) {
+        fs.unlinkSync(fullPath);
+      }
+    });
+  } catch (_e) {}
+}
+
+async function uploadBackupToSupabase(localFilePath, backupBody, options = {}) {
+  if (!BACKUP_SUPABASE_UPLOAD) {
+    return { ok: true, path: "" };
+  }
+  if (!supabase) {
+    return { ok: false, error: "Supabase is not configured" };
+  }
+  if (!BACKUP_SUPABASE_BUCKET) {
+    return { ok: false, error: "BACKUP_SUPABASE_BUCKET is not configured" };
+  }
+  const dateKey = String(options?.dateKey || getJstDateOffset(0).replace(/-/g, ""));
+  const fileName = path.basename(localFilePath);
+  const storagePath = `${BACKUP_SUPABASE_PREFIX}/${sanitizePathToken(APP_TENANT_ID)}/${dateKey}/${sanitizePathToken(fileName)}`;
+  try {
+    const fileBuffer = Buffer.from(JSON.stringify(backupBody, null, 2), "utf8");
+    const { error } = await supabase.storage.from(BACKUP_SUPABASE_BUCKET).upload(storagePath, fileBuffer, {
+      upsert: false,
+      contentType: "application/json",
+    });
+    if (error) {
+      return { ok: false, error: String(error?.message || error) };
+    }
+    return { ok: true, path: storagePath };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error) };
+  }
 }
 
 async function initializeExternalPersistence() {
