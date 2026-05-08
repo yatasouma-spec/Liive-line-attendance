@@ -44,6 +44,9 @@
             <select id="themeSelect" class="theme-select" aria-label="デザインテーマ" disabled>
               <option value="blue">Blue</option>
             </select>
+            <span id="adminAuthStatus" class="auth-status">認証: 未確認</span>
+            <button type="button" id="adminLoginBtn" class="btn btn-ghost">管理者ログイン</button>
+            <button type="button" id="adminLogoutBtn" class="btn btn-ghost" hidden>ログアウト</button>
           </div>
         </header>
 
@@ -631,6 +634,26 @@
           </section>
         </section>
       </main>
+    </div>
+    <div id="adminLoginModal" class="auth-modal hidden" role="dialog" aria-modal="true" aria-labelledby="adminLoginTitle">
+      <div class="auth-modal-card">
+        <div class="auth-modal-head">
+          <h2 id="adminLoginTitle">管理者ログイン</h2>
+          <button type="button" id="adminLoginCloseBtn" class="btn btn-ghost">閉じる</button>
+        </div>
+        <p id="adminLoginMessage" class="section-lead">管理画面を利用するにはログインが必要です。</p>
+        <form id="adminLoginForm" class="auth-form">
+          <label>ログインID
+            <input id="adminLoginId" type="text" autocomplete="username" required />
+          </label>
+          <label>パスワード
+            <input id="adminLoginPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <div class="auth-actions">
+            <button type="submit" class="btn" id="adminLoginSubmitBtn">ログイン</button>
+          </div>
+        </form>
+      </div>
     </div>
     <script src="/node_modules/xlsx/dist/xlsx.full.min.js"></script>
     <script src="./app.v3.js"></script>

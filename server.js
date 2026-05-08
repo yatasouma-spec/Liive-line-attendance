@@ -62,6 +62,14 @@ const ALCOHOL_OCR_TOLERANCE = clampDecimal(process.env.ALCOHOL_OCR_TOLERANCE, 0.
 const AWS_REGION = String(process.env.AWS_REGION || "ap-northeast-1").trim() || "ap-northeast-1";
 const AWS_REKOGNITION_ENABLED = parseBooleanEnv(process.env.AWS_REKOGNITION_ENABLED, false);
 const AWS_TEXTRACT_ENABLED = parseBooleanEnv(process.env.AWS_TEXTRACT_ENABLED, false);
+const ADMIN_AUTH_ENABLED = parseBooleanEnv(process.env.ADMIN_AUTH_ENABLED, false);
+const ADMIN_LOGIN_ID = String(process.env.ADMIN_LOGIN_ID || "admin").trim() || "admin";
+const ADMIN_LOGIN_PASSWORD = String(process.env.ADMIN_LOGIN_PASSWORD || "").trim();
+const ADMIN_SESSION_SECRET =
+  String(process.env.ADMIN_SESSION_SECRET || process.env.LINE_CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET_2 || "liive-admin-session")
+    .trim() || "liive-admin-session";
+const ADMIN_SESSION_TTL_HOURS = Math.min(168, Math.max(1, Number(process.env.ADMIN_SESSION_TTL_HOURS || 12)));
+const ADMIN_AUTH_EXEMPT_PATHS = new Set(["/health", "/auth/config", "/auth/login"]);
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -417,6 +425,99 @@ app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "coreca-line-attendance", at: new Date().toISOString() });
+});
+
+app.get("/api/auth/config", (_req, res) => {
+  res.json({
+    ok: true,
+    enabled: ADMIN_AUTH_ENABLED,
+    loginIdHint: ADMIN_LOGIN_ID,
+    sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
+  });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  if (!ADMIN_AUTH_ENABLED) {
+    return res.json({
+      ok: true,
+      enabled: false,
+      token: "",
+      adminId: "",
+      expiresAt: null,
+    });
+  }
+  if (!ADMIN_LOGIN_PASSWORD) {
+    return res.status(500).json({
+      ok: false,
+      error: "ADMIN_LOGIN_PASSWORD is not configured",
+      code: "AUTH_CONFIG_MISSING",
+    });
+  }
+  const loginId = String(req.body?.loginId || "").trim();
+  const password = String(req.body?.password || "").trim();
+  const idOk = secureTextMatch(loginId, ADMIN_LOGIN_ID);
+  const passwordOk = secureTextMatch(password, ADMIN_LOGIN_PASSWORD);
+  if (!idOk || !passwordOk) {
+    return res.status(401).json({
+      ok: false,
+      error: "ログインIDまたはパスワードが正しくありません",
+      code: "AUTH_INVALID_CREDENTIALS",
+    });
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expSec = nowSec + Math.round(ADMIN_SESSION_TTL_HOURS * 60 * 60);
+  const token = createAdminSessionToken({
+    sub: ADMIN_LOGIN_ID,
+    tenant: APP_TENANT_ID,
+    iat: nowSec,
+    exp: expSec,
+  });
+  res.json({
+    ok: true,
+    enabled: true,
+    token,
+    adminId: ADMIN_LOGIN_ID,
+    expiresAt: new Date(expSec * 1000).toISOString(),
+  });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  if (!ADMIN_AUTH_ENABLED) {
+    return res.json({ ok: true, enabled: false, loggedIn: false });
+  }
+  const auth = verifyAdminSessionFromRequest(req);
+  if (!auth.ok) {
+    return res.status(401).json({
+      ok: false,
+      error: "管理者ログインが必要です",
+      code: "AUTH_REQUIRED",
+    });
+  }
+  res.json({
+    ok: true,
+    enabled: true,
+    loggedIn: true,
+    adminId: String(auth.payload?.sub || ADMIN_LOGIN_ID),
+    expiresAt:
+      Number.isFinite(Number(auth.payload?.exp)) && Number(auth.payload.exp) > 0
+        ? new Date(Number(auth.payload.exp) * 1000).toISOString()
+        : null,
+  });
+});
+
+app.use("/api", (req, res, next) => {
+  if (!ADMIN_AUTH_ENABLED) return next();
+  if (ADMIN_AUTH_EXEMPT_PATHS.has(req.path)) return next();
+  const auth = verifyAdminSessionFromRequest(req);
+  if (!auth.ok) {
+    return res.status(401).json({
+      ok: false,
+      error: "管理者ログインが必要です",
+      code: "AUTH_REQUIRED",
+    });
+  }
+  req.adminAuth = auth.payload || null;
+  return next();
 });
 
 app.get("/api/system/persistence-status", (_req, res) => {
@@ -1807,6 +1908,12 @@ function buildPersistenceStatus() {
       faceMatchThreshold: FACE_MATCH_THRESHOLD,
       alcoholOcrTolerance: ALCOHOL_OCR_TOLERANCE,
     },
+    adminAuth: {
+      enabled: ADMIN_AUTH_ENABLED,
+      loginIdHint: ADMIN_LOGIN_ID,
+      sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
+      passwordConfigured: Boolean(ADMIN_LOGIN_PASSWORD),
+    },
   };
 }
 
@@ -2963,6 +3070,53 @@ function safeJsonParse(text, fallback) {
   } catch (_e) {
     return fallback;
   }
+}
+
+function secureTextMatch(input, expected) {
+  const left = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(input || "")).digest();
+  const right = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(expected || "")).digest();
+  return crypto.timingSafeEqual(left, right);
+}
+
+function createAdminSessionToken(payload) {
+  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+function verifyAdminSessionToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw || !raw.includes(".")) return { ok: false, error: "token_missing", payload: null };
+  const [body, signature] = raw.split(".");
+  if (!body || !signature) return { ok: false, error: "token_format_invalid", payload: null };
+  const expectedSignature = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(body).digest("base64url");
+  const isValidSignature = secureTextMatch(signature, expectedSignature);
+  if (!isValidSignature) return { ok: false, error: "token_signature_invalid", payload: null };
+  const payloadText = Buffer.from(body, "base64url").toString("utf8");
+  const payload = safeJsonParse(payloadText, null);
+  if (!payload || typeof payload !== "object") return { ok: false, error: "token_payload_invalid", payload: null };
+  const nowSec = Math.floor(Date.now() / 1000);
+  const exp = Number(payload.exp || 0);
+  if (!Number.isFinite(exp) || exp <= nowSec) return { ok: false, error: "token_expired", payload: null };
+  const tenant = String(payload.tenant || APP_TENANT_ID);
+  if (tenant !== APP_TENANT_ID) return { ok: false, error: "token_tenant_mismatch", payload: null };
+  return { ok: true, error: "", payload };
+}
+
+function extractAdminTokenFromRequest(req) {
+  const authHeader = String(req.get("authorization") || "").trim();
+  if (/^bearer\s+/i.test(authHeader)) return authHeader.replace(/^bearer\s+/i, "").trim();
+  const headerToken = String(req.get("x-admin-token") || "").trim();
+  if (headerToken) return headerToken;
+  const cookieHeader = String(req.get("cookie") || "");
+  const match = cookieHeader.match(/(?:^|;\s*)liive_admin_token=([^;]+)/);
+  if (match?.[1]) return decodeURIComponent(match[1]);
+  return "";
+}
+
+function verifyAdminSessionFromRequest(req) {
+  const token = extractAdminTokenFromRequest(req);
+  return verifyAdminSessionToken(token);
 }
 
 function deepCloneJson(value) {

@@ -69,6 +69,13 @@ open "http://localhost:3000/index.html"
 - `FACE_MATCH_THRESHOLD`（任意: 既定 `90`）
 - `ALCOHOL_OCR_TOLERANCE`（任意: 既定 `0.02`）
 
+### 5-4. 管理者ログイン
+- `ADMIN_AUTH_ENABLED=true`
+- `ADMIN_LOGIN_ID`（例: `admin`）
+- `ADMIN_LOGIN_PASSWORD`（必須）
+- `ADMIN_SESSION_SECRET`（推奨）
+- `ADMIN_SESSION_TTL_HOURS`（任意: 既定 `12`）
+
 ### LINE_USER_MAP_JSON 例
 ```json
 {
@@ -93,6 +100,7 @@ open "http://localhost:3000/index.html"
 3. Storageバケット（例: `liive-evidence`）を作成
 4. Render環境変数に `SUPABASE_*` を設定
 5. `/api/system/persistence-status` で `supabase.enabled=true` を確認
+6. 管理者ログインを有効化する場合は `ADMIN_*` も設定
 
 ## 7. 動作確認シナリオ
 1. LINEで `出勤` を送る
@@ -106,6 +114,9 @@ open "http://localhost:3000/index.html"
 - HTTPSドメインで公開されている
 - `/api/health` が200で返る
 - `/api/system/persistence-status` が200で、設定値が想定どおり
+- `ADMIN_AUTH_ENABLED=true` の場合:
+  - `/api/bootstrap` を未認証で叩くと 401
+  - `/api/auth/login` でトークン発行できる
 - Webhook署名エラーが出ない
 - LINEユーザーIDと社員名マップが正しい
 - CSV出力で勤怠データが取得できる

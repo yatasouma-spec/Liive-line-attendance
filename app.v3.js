@@ -16,6 +16,9 @@ const ALCOHOL_LIMIT_KEY = "liiveAttendanceAlcoholLimitV1";
 const START_SITES_KEY = "liiveAttendanceStartSitesV1";
 const END_SITES_KEY = "liiveAttendanceEndSitesV1";
 const EMPLOYEE_SITE_LINK_KEY = "liiveAttendanceEmployeeSiteLinksV1";
+const ADMIN_AUTH_TOKEN_KEY = "liiveAdminAuthTokenV1";
+const ADMIN_AUTH_EXPIRES_KEY = "liiveAdminAuthExpiresAtV1";
+const ADMIN_AUTH_LOGIN_ID_KEY = "liiveAdminAuthLoginIdV1";
 
 const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
@@ -51,6 +54,12 @@ function loadJson(key, fallback) {
   return fallback;
 }
 
+function loadText(key, fallback = "") {
+  const value = localStorage.getItem(key);
+  if (value === null || value === undefined) return fallback;
+  return String(value);
+}
+
 const state = {
   activeView: "dashboard",
   logs: loadJson(LOGS_KEY, []),
@@ -76,6 +85,18 @@ const state = {
   startSites: loadJson(START_SITES_KEY, []),
   endSites: loadJson(END_SITES_KEY, []),
   employeeSiteLinks: loadJson(EMPLOYEE_SITE_LINK_KEY, []),
+  auth: {
+    enabled: false,
+    checked: false,
+    loggedIn: false,
+    token: loadText(ADMIN_AUTH_TOKEN_KEY, ""),
+    expiresAt: loadText(ADMIN_AUTH_EXPIRES_KEY, ""),
+    adminId: loadText(ADMIN_AUTH_LOGIN_ID_KEY, ""),
+    loginIdHint: "admin",
+    modalOpen: false,
+    configError: "",
+  },
+  apiPollingTimers: [],
 };
 
 const viewTitle = {
@@ -826,22 +847,193 @@ function isMonthLocked(month) {
   return false;
 }
 
+function setAuthSession(token, expiresAt, adminId = "") {
+  state.auth.token = String(token || "");
+  state.auth.expiresAt = String(expiresAt || "");
+  state.auth.adminId = String(adminId || "");
+  state.auth.loggedIn = !!state.auth.token;
+  localStorage.setItem(ADMIN_AUTH_TOKEN_KEY, state.auth.token);
+  localStorage.setItem(ADMIN_AUTH_EXPIRES_KEY, state.auth.expiresAt);
+  localStorage.setItem(ADMIN_AUTH_LOGIN_ID_KEY, state.auth.adminId);
+  updateAdminAuthUi();
+}
+
+function clearAuthSession() {
+  state.auth.token = "";
+  state.auth.expiresAt = "";
+  state.auth.adminId = "";
+  state.auth.loggedIn = false;
+  localStorage.removeItem(ADMIN_AUTH_TOKEN_KEY);
+  localStorage.removeItem(ADMIN_AUTH_EXPIRES_KEY);
+  localStorage.removeItem(ADMIN_AUTH_LOGIN_ID_KEY);
+  stopApiPolling();
+  updateAdminAuthUi();
+}
+
+function updateAdminAuthUi() {
+  const statusEl = document.getElementById("adminAuthStatus");
+  const loginBtn = document.getElementById("adminLoginBtn");
+  const logoutBtn = document.getElementById("adminLogoutBtn");
+  if (!statusEl || !loginBtn || !logoutBtn) return;
+  statusEl.classList.remove("ok", "warn", "neutral");
+  if (!state.auth.checked) {
+    statusEl.classList.add("neutral");
+    statusEl.textContent = "認証: 確認中";
+    loginBtn.hidden = true;
+    logoutBtn.hidden = true;
+    return;
+  }
+  if (!state.auth.enabled) {
+    statusEl.classList.add("neutral");
+    statusEl.textContent = "認証: 無効";
+    loginBtn.hidden = true;
+    logoutBtn.hidden = true;
+    return;
+  }
+  if (state.auth.loggedIn) {
+    statusEl.classList.add("ok");
+    const expLabel = state.auth.expiresAt ? state.auth.expiresAt.slice(0, 16).replace("T", " ") : "-";
+    statusEl.textContent = `認証: ログイン中 (${state.auth.adminId || "admin"} / ${expLabel})`;
+    loginBtn.hidden = true;
+    logoutBtn.hidden = false;
+    return;
+  }
+  statusEl.classList.add("warn");
+  statusEl.textContent = "認証: 未ログイン";
+  loginBtn.hidden = false;
+  logoutBtn.hidden = true;
+}
+
+function showAdminLoginModal(message = "") {
+  const modal = document.getElementById("adminLoginModal");
+  if (!modal) return;
+  const msgEl = document.getElementById("adminLoginMessage");
+  const idEl = document.getElementById("adminLoginId");
+  const pwEl = document.getElementById("adminLoginPassword");
+  if (msgEl) msgEl.textContent = message || "管理画面を利用するにはログインしてください。";
+  if (idEl && !idEl.value) idEl.value = state.auth.loginIdHint || "admin";
+  if (pwEl) pwEl.value = "";
+  modal.classList.remove("hidden");
+  state.auth.modalOpen = true;
+}
+
+function hideAdminLoginModal() {
+  const modal = document.getElementById("adminLoginModal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  state.auth.modalOpen = false;
+}
+
+function handleApiUnauthorized(message = "") {
+  clearAuthSession();
+  if (!state.auth.enabled) return;
+  if (!state.auth.modalOpen) {
+    showAdminLoginModal(message || "セッションが切れました。再ログインしてください。");
+  }
+}
+
 async function apiRequest(path, options = {}) {
   if (!API_ENABLED) return null;
+  const { skipAuthHandling = false, headers: customHeaders = {}, ...rest } = options;
+  const headers = {
+    "Content-Type": "application/json",
+    ...customHeaders,
+  };
+  if (state.auth?.token) {
+    headers.Authorization = `Bearer ${state.auth.token}`;
+  }
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
+    headers,
+    ...rest,
   });
   if (!response.ok) {
     let message = `API ${response.status}`;
+    let code = "";
     try {
       const body = await response.json();
       if (body?.message) message = body.message;
       else if (body?.error) message = body.error;
+      code = String(body?.code || "");
     } catch (_e) {}
+    if (response.status === 401 && !skipAuthHandling && code === "AUTH_REQUIRED") {
+      handleApiUnauthorized(message);
+    }
     throw new Error(message);
   }
   return response.json();
+}
+
+async function fetchAdminAuthConfig() {
+  if (!API_ENABLED) return;
+  try {
+    const data = await apiRequest("/api/auth/config", { skipAuthHandling: true });
+    state.auth.enabled = !!data?.enabled;
+    state.auth.loginIdHint = normalizeText(data?.loginIdHint || "admin") || "admin";
+    state.auth.checked = true;
+    state.auth.configError = "";
+  } catch (error) {
+    state.auth.checked = true;
+    state.auth.enabled = false;
+    state.auth.configError = String(error?.message || error);
+  }
+  updateAdminAuthUi();
+}
+
+async function checkAdminSession() {
+  if (!API_ENABLED || !state.auth.enabled) return true;
+  if (!state.auth.token) {
+    state.auth.loggedIn = false;
+    updateAdminAuthUi();
+    return false;
+  }
+  try {
+    const data = await apiRequest("/api/auth/me", { skipAuthHandling: true });
+    if (data?.ok && data?.loggedIn) {
+      setAuthSession(state.auth.token, data.expiresAt || state.auth.expiresAt, data.adminId || state.auth.adminId);
+      state.auth.loggedIn = true;
+      updateAdminAuthUi();
+      return true;
+    }
+  } catch (_e) {}
+  clearAuthSession();
+  return false;
+}
+
+async function loginAdmin(loginId, password) {
+  if (!API_ENABLED) return false;
+  const submitBtn = document.getElementById("adminLoginSubmitBtn");
+  if (submitBtn instanceof HTMLButtonElement) submitBtn.disabled = true;
+  try {
+    const data = await apiRequest("/api/auth/login", {
+      method: "POST",
+      skipAuthHandling: true,
+      body: JSON.stringify({
+        loginId: normalizeText(loginId || ""),
+        password: String(password || ""),
+      }),
+    });
+    if (!data?.ok) throw new Error("ログインに失敗しました");
+    if (!data?.enabled) {
+      state.auth.enabled = false;
+      state.auth.checked = true;
+      hideAdminLoginModal();
+      updateAdminAuthUi();
+      await ensureApiPollingStarted();
+      return true;
+    }
+    setAuthSession(data.token || "", data.expiresAt || "", data.adminId || "");
+    hideAdminLoginModal();
+    await ensureApiPollingStarted();
+    await pullSnapshot();
+    await fetchLineUsers();
+    await fetchShiftDeliveryStatus();
+    return true;
+  } catch (error) {
+    showAdminLoginModal(String(error?.message || "ログインに失敗しました"));
+    return false;
+  } finally {
+    if (submitBtn instanceof HTMLButtonElement) submitBtn.disabled = false;
+  }
 }
 
 function uniqueTodayUsers() {
@@ -3520,6 +3712,27 @@ function bindEvents() {
   document.getElementById("themeSelect")?.addEventListener("change", (e) => {
     applyTheme(e.target.value);
   });
+  document.getElementById("adminLoginBtn")?.addEventListener("click", () => {
+    showAdminLoginModal("管理画面を利用するにはログインしてください。");
+  });
+  document.getElementById("adminLogoutBtn")?.addEventListener("click", () => {
+    clearAuthSession();
+    if (state.auth.enabled) showAdminLoginModal("ログアウトしました。再ログインしてください。");
+  });
+  document.getElementById("adminLoginCloseBtn")?.addEventListener("click", () => {
+    if (!state.auth.enabled || state.auth.loggedIn) hideAdminLoginModal();
+  });
+  document.getElementById("adminLoginModal")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.id === "adminLoginModal" && (!state.auth.enabled || state.auth.loggedIn)) hideAdminLoginModal();
+  });
+  document.getElementById("adminLoginForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const loginId = document.getElementById("adminLoginId")?.value || "";
+    const password = document.getElementById("adminLoginPassword")?.value || "";
+    await loginAdmin(loginId, password);
+  });
 
   const monthInput = document.getElementById("timecardMonth");
   if (monthInput) {
@@ -3670,7 +3883,25 @@ function bindEvents() {
   bindMasterEvents();
 }
 
-function init() {
+function stopApiPolling() {
+  state.apiPollingTimers.forEach((timer) => clearInterval(timer));
+  state.apiPollingTimers = [];
+}
+
+async function ensureApiPollingStarted() {
+  if (!API_ENABLED) return;
+  if (state.apiPollingTimers.length) return;
+  await pullSnapshot();
+  await fetchLineUsers();
+  await fetchShiftDeliveryStatus();
+  syncShiftPlansToServer();
+  syncEmployeesToServer();
+  state.apiPollingTimers.push(setInterval(pullSnapshot, API_POLL_MS));
+  state.apiPollingTimers.push(setInterval(fetchLineUsers, API_POLL_MS * 2));
+  state.apiPollingTimers.push(setInterval(fetchShiftDeliveryStatus, API_POLL_MS * 6));
+}
+
+async function init() {
   normalizeEmployeeRows();
   normalizeSiteMasterRows();
   state.alcoholLimit = normalizeAlcoholLimit(state.alcoholLimit);
@@ -3678,15 +3909,18 @@ function init() {
   bindEvents();
   renderAll();
   if (API_ENABLED) {
-    pullSnapshot();
-    fetchLineUsers();
-    fetchShiftDeliveryStatus();
-    syncShiftPlansToServer();
-    syncEmployeesToServer();
-    setInterval(pullSnapshot, API_POLL_MS);
-    setInterval(fetchLineUsers, API_POLL_MS * 2);
-    setInterval(fetchShiftDeliveryStatus, API_POLL_MS * 6);
+    await fetchAdminAuthConfig();
+    if (!state.auth.enabled) {
+      await ensureApiPollingStarted();
+      return;
+    }
+    const ok = await checkAdminSession();
+    if (ok) {
+      await ensureApiPollingStarted();
+    } else {
+      showAdminLoginModal("管理画面を利用するにはログインしてください。");
+    }
   }
 }
 
-init();
+void init();
