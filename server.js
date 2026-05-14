@@ -56,6 +56,8 @@ const SUPABASE_STATE_TABLE = String(process.env.SUPABASE_STATE_TABLE || "app_sta
 const SUPABASE_STATE_KEY = String(process.env.SUPABASE_STATE_KEY || "liive-primary").trim() || "liive-primary";
 const SUPABASE_STORAGE_BUCKET = String(process.env.SUPABASE_STORAGE_BUCKET || "").trim();
 const SUPABASE_EVIDENCE_PREFIX = String(process.env.SUPABASE_EVIDENCE_PREFIX || "evidence").trim() || "evidence";
+const MANUAL_SUPABASE_BUCKET = String(process.env.MANUAL_SUPABASE_BUCKET || SUPABASE_STORAGE_BUCKET || "").trim();
+const MANUAL_SUPABASE_PREFIX = String(process.env.MANUAL_SUPABASE_PREFIX || "manual").trim() || "manual";
 const EVIDENCE_VERIFICATION_MODE = normalizeEvidenceVerificationMode(process.env.EVIDENCE_VERIFICATION_MODE || "off");
 const FACE_MATCH_THRESHOLD = clampPercent(process.env.FACE_MATCH_THRESHOLD, 90);
 const ALCOHOL_OCR_TOLERANCE = clampDecimal(process.env.ALCOHOL_OCR_TOLERANCE, 0.02, 0, 0.5);
@@ -520,16 +522,23 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "coreca-line-attendance", at: new Date().toISOString() });
 });
 
-app.get(MANUAL_PDF_URL_PATH, (_req, res) => {
-  if (!fs.existsSync(MANUAL_PDF_FILE)) {
+app.get(MANUAL_PDF_URL_PATH, async (_req, res) => {
+  if (fs.existsSync(MANUAL_PDF_FILE)) {
+    return res.sendFile(MANUAL_PDF_FILE, {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+  const db = readDb();
+  const resolved = await fetchManualPdfFromStorage(db);
+  if (!resolved.ok || !resolved.buffer) {
     return res.status(404).send("instruction pdf not found");
   }
-  return res.sendFile(MANUAL_PDF_FILE, {
-    headers: {
-      "Content-Type": "application/pdf",
-      "Cache-Control": "no-store",
-    },
-  });
+  ensureManualDataDirectory();
+  fs.writeFileSync(MANUAL_PDF_FILE, resolved.buffer);
+  return res.set("Content-Type", "application/pdf").set("Cache-Control", "no-store").send(resolved.buffer);
 });
 
 app.get("/api/auth/config", (_req, res) => {
@@ -754,20 +763,27 @@ app.get("/api/manual/instruction", (req, res) => {
 app.post(
   "/api/manual/instruction-pdf",
   express.raw({ type: ["application/pdf", "application/octet-stream"], limit: "20mb" }),
-  (req, res) => {
+  async (req, res) => {
     const body = req.body;
     if (!Buffer.isBuffer(body) || !body.length) {
       return res.status(400).json({ ok: false, error: "pdf body is required" });
     }
     ensureManualDataDirectory();
     fs.writeFileSync(MANUAL_PDF_FILE, body);
+    const storageResult = await uploadManualPdfToStorage(body);
+    const nowIso = new Date().toISOString();
+    const fallbackStoragePath = buildManualStoragePath();
     const db = readDb();
     db.manualInstruction = {
       fileName: MANUAL_PDF_FILENAME,
       sizeBytes: body.length,
-      uploadedAt: new Date().toISOString(),
+      uploadedAt: nowIso,
       uploadedBy: String(req.adminAuth?.sub || ADMIN_LOGIN_ID || "admin"),
       contentType: "application/pdf",
+      storageBucket: storageResult.bucket || MANUAL_SUPABASE_BUCKET || "",
+      storagePath: storageResult.path || fallbackStoragePath,
+      storageUploaded: Boolean(storageResult.ok && storageResult.path),
+      storageError: storageResult.ok ? "" : String(storageResult.error || ""),
     };
     writeDb(db);
     const info = resolveManualInstructionInfo(db, req);
@@ -1889,16 +1905,27 @@ function summarizeBehaviorReportStatus(reports) {
 
 function resolveManualInstructionInfo(db, req) {
   const manual = db?.manualInstruction || {};
-  const exists = fs.existsSync(MANUAL_PDF_FILE);
+  const localExists = fs.existsSync(MANUAL_PDF_FILE);
+  const storageExists = Boolean(
+    manual.storageUploaded &&
+      String(manual.storageBucket || MANUAL_SUPABASE_BUCKET || "").trim() &&
+      String(manual.storagePath || "").trim()
+  );
+  const exists = localExists || storageExists;
   const origin = resolveRequestOrigin(req);
   const publicUrl = exists && origin ? `${origin}${MANUAL_PDF_URL_PATH}` : "";
   return {
     exists,
     publicUrl,
     fileName: manual.fileName || (exists ? MANUAL_PDF_FILENAME : ""),
-    sizeBytes: Number(manual.sizeBytes || (exists ? fs.statSync(MANUAL_PDF_FILE).size : 0)),
+    sizeBytes: Number(manual.sizeBytes || (localExists ? fs.statSync(MANUAL_PDF_FILE).size : 0)),
     uploadedAt: manual.uploadedAt || null,
     uploadedBy: manual.uploadedBy || "",
+    source: localExists ? "local" : storageExists ? "supabase" : "",
+    storageBucket: String(manual.storageBucket || MANUAL_SUPABASE_BUCKET || ""),
+    storagePath: String(manual.storagePath || ""),
+    storageUploaded: Boolean(manual.storageUploaded),
+    storageError: String(manual.storageError || ""),
   };
 }
 
@@ -2873,6 +2900,11 @@ function buildPersistenceStatus() {
       bucket: SUPABASE_STORAGE_BUCKET || "",
       prefix: SUPABASE_EVIDENCE_PREFIX,
     },
+    manualStorage: {
+      enabled: isManualStorageEnabled(),
+      bucket: MANUAL_SUPABASE_BUCKET || "",
+      prefix: MANUAL_SUPABASE_PREFIX,
+    },
     verification: {
       mode: EVIDENCE_VERIFICATION_MODE,
       rekognitionEnabled: Boolean(rekognitionClient),
@@ -3037,6 +3069,50 @@ async function uploadBackupToSupabase(localFilePath, backupBody, options = {}) {
   } catch (error) {
     return { ok: false, error: String(error?.message || error) };
   }
+}
+
+function isManualStorageEnabled() {
+  return Boolean(supabase && MANUAL_SUPABASE_BUCKET);
+}
+
+function buildManualStoragePath() {
+  return `${MANUAL_SUPABASE_PREFIX}/${sanitizePathToken(APP_TENANT_ID)}/${MANUAL_PDF_FILENAME}`;
+}
+
+async function uploadManualPdfToStorage(pdfBuffer) {
+  if (!isManualStorageEnabled()) {
+    return { ok: false, bucket: MANUAL_SUPABASE_BUCKET || "", path: "", error: "manual storage disabled" };
+  }
+  if (!Buffer.isBuffer(pdfBuffer) || !pdfBuffer.length) {
+    return { ok: false, bucket: MANUAL_SUPABASE_BUCKET || "", path: "", error: "pdf buffer is empty" };
+  }
+  const objectPath = buildManualStoragePath();
+  try {
+    const { error } = await supabase.storage.from(MANUAL_SUPABASE_BUCKET).upload(objectPath, pdfBuffer, {
+      upsert: true,
+      contentType: "application/pdf",
+    });
+    if (error) {
+      return { ok: false, bucket: MANUAL_SUPABASE_BUCKET, path: objectPath, error: String(error?.message || error) };
+    }
+    return { ok: true, bucket: MANUAL_SUPABASE_BUCKET, path: objectPath, error: "" };
+  } catch (error) {
+    return { ok: false, bucket: MANUAL_SUPABASE_BUCKET, path: objectPath, error: String(error?.message || error) };
+  }
+}
+
+async function fetchManualPdfFromStorage(db) {
+  const manual = db?.manualInstruction || {};
+  const bucket = String(manual.storageBucket || MANUAL_SUPABASE_BUCKET || "").trim();
+  const objectPath = String(manual.storagePath || buildManualStoragePath()).trim();
+  if (!supabase || !bucket || !objectPath) {
+    return { ok: false, buffer: null, error: "manual storage is not ready" };
+  }
+  const buffer = await fetchStorageBuffer(bucket, objectPath);
+  if (!buffer) {
+    return { ok: false, buffer: null, error: "manual pdf fetch failed" };
+  }
+  return { ok: true, buffer, error: "" };
 }
 
 async function initializeExternalPersistence() {
@@ -4156,6 +4232,10 @@ function createEmptyDb() {
       uploadedAt: null,
       uploadedBy: "",
       contentType: "application/pdf",
+      storageBucket: "",
+      storagePath: "",
+      storageUploaded: false,
+      storageError: "",
     },
   };
 }
@@ -4189,6 +4269,10 @@ function hydrateDbShape(input) {
     uploadedAt: parsed?.manualInstruction?.uploadedAt || null,
     uploadedBy: String(parsed?.manualInstruction?.uploadedBy || ""),
     contentType: String(parsed?.manualInstruction?.contentType || "application/pdf"),
+    storageBucket: String(parsed?.manualInstruction?.storageBucket || ""),
+    storagePath: String(parsed?.manualInstruction?.storagePath || ""),
+    storageUploaded: Boolean(parsed?.manualInstruction?.storageUploaded),
+    storageError: String(parsed?.manualInstruction?.storageError || ""),
   };
   out.timecards = out.timecards.map((row) => ({
     ...row,

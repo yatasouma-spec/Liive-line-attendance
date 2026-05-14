@@ -56,6 +56,10 @@ open "http://localhost:3000/index.html"
 - `SUPABASE_EVIDENCE_PREFIX`（任意: 既定 `evidence`）
 - `EVIDENCE_RETENTION_DAYS`（任意: 既定 `730`）
 
+### 5-2b. Supabase Storage（マニュアルPDF）
+- `MANUAL_SUPABASE_BUCKET`（任意: 未指定時は `SUPABASE_STORAGE_BUCKET` を利用）
+- `MANUAL_SUPABASE_PREFIX`（任意: 既定 `manual`）
+
 ### 5-3. 顔認識・飲酒値照合
 - `EVIDENCE_VERIFICATION_MODE`
   - `off`（既定）
@@ -113,10 +117,12 @@ open "http://localhost:3000/index.html"
 ### 6-1. Supabase初期化
 1. Supabaseを作成
 2. SQL Editorで `supabase/init.sql` を実行
-3. Storageバケット（例: `liive-evidence`）を作成
-4. Render環境変数に `SUPABASE_*` を設定
-5. `/api/system/persistence-status` で `supabase.enabled=true` を確認
-6. 管理者ログインを有効化する場合は `ADMIN_*` も設定
+3. Storageバケット（例: `liive-evidence`, `liive-backups`）を作成
+4. （任意）マニュアルPDF用に `liive-manual` バケットを作成
+5. Render環境変数に `SUPABASE_*` を設定
+6. マニュアルPDFをSupabaseへ保存する場合は `MANUAL_SUPABASE_BUCKET`（例: `liive-manual`）を設定
+7. `/api/system/persistence-status` で `supabase.enabled=true` を確認
+8. 管理者ログインを有効化する場合は `ADMIN_*` も設定
 
 ## 7. 動作確認シナリオ
 1. LINEで `出勤` を送る
