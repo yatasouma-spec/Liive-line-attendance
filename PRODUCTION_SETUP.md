@@ -79,6 +79,9 @@ open "http://localhost:3000/index.html"
 - `ADMIN_LOGIN_PASSWORD`（必須）
 - `ADMIN_SESSION_SECRET`（推奨）
 - `ADMIN_SESSION_TTL_HOURS`（任意: 既定 `12`）
+- `ADMIN_LOGIN_MAX_ATTEMPTS`（任意: 既定 `6`）
+- `ADMIN_LOGIN_WINDOW_MINUTES`（任意: 既定 `15`）
+- `ADMIN_LOGIN_LOCK_MINUTES`（任意: 既定 `30`）
 
 ### 5-5. 日次バックアップ
 - `BACKUP_ENABLED=true`
@@ -143,6 +146,7 @@ open "http://localhost:3000/index.html"
 - `ADMIN_AUTH_ENABLED=true` の場合:
   - `/api/bootstrap` を未認証で叩くと 401
   - `/api/auth/login` でトークン発行できる
+  - `/api/auth/login` で誤ログインを連続実行すると 429（`AUTH_RATE_LIMITED`）になる
 - Webhook署名エラーが出ない
 - LINEユーザーIDと社員名マップが正しい
 - CSV出力で勤怠データが取得できる

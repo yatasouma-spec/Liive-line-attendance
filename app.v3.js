@@ -132,6 +132,18 @@ const state = {
     loginIdHint: "admin",
     modalOpen: false,
     configError: "",
+    configWarnings: [],
+    throttlePolicy: {
+      maxAttempts: 0,
+      windowMinutes: 0,
+      lockMinutes: 0,
+    },
+    throttle: {
+      locked: false,
+      retryAfterSec: 0,
+      lockedUntil: null,
+      remainingAttempts: 0,
+    },
   },
   apiPollingTimers: [],
 };
@@ -914,6 +926,7 @@ function updateAdminAuthUi() {
   const logoutBtn = document.getElementById("adminLogoutBtn");
   if (!statusEl || !loginBtn || !logoutBtn) return;
   statusEl.classList.remove("ok", "warn", "neutral");
+  statusEl.removeAttribute("title");
   if (!state.auth.checked) {
     statusEl.classList.add("neutral");
     statusEl.textContent = "認証: 確認中";
@@ -934,12 +947,68 @@ function updateAdminAuthUi() {
     statusEl.textContent = `認証: ログイン中 (${state.auth.adminId || "admin"} / ${expLabel})`;
     loginBtn.hidden = true;
     logoutBtn.hidden = false;
-    return;
+  } else if (state.auth.throttle?.locked) {
+    statusEl.classList.add("warn");
+    statusEl.textContent = "認証: ログイン一時ロック中";
+    loginBtn.hidden = false;
+    logoutBtn.hidden = true;
+  } else {
+    statusEl.classList.add("warn");
+    statusEl.textContent = "認証: 未ログイン";
+    loginBtn.hidden = false;
+    logoutBtn.hidden = true;
   }
-  statusEl.classList.add("warn");
-  statusEl.textContent = "認証: 未ログイン";
-  loginBtn.hidden = false;
-  logoutBtn.hidden = true;
+  const details = [];
+  if (state.auth.configError) details.push(`設定取得エラー: ${state.auth.configError}`);
+  if (Array.isArray(state.auth.configWarnings) && state.auth.configWarnings.length) {
+    details.push(`設定警告: ${state.auth.configWarnings.join(" / ")}`);
+  }
+  if (state.auth.throttle?.locked) {
+    const retry = Number(state.auth.throttle.retryAfterSec || 0);
+    if (retry > 0) details.push(`再試行まで: 約${retry}秒`);
+  }
+  if (!state.auth.loggedIn && Number.isFinite(Number(state.auth.throttle?.remainingAttempts))) {
+    const remaining = Number(state.auth.throttle.remainingAttempts);
+    if (remaining > 0 && Number.isFinite(Number(state.auth.throttlePolicy?.maxAttempts)) && Number(state.auth.throttlePolicy.maxAttempts) > 0) {
+      details.push(`残り試行回数: ${remaining}/${Number(state.auth.throttlePolicy.maxAttempts)}`);
+    }
+  }
+  if (details.length) {
+    statusEl.title = details.join("\n");
+  }
+}
+
+function normalizeAuthWarnings(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => normalizeText(item)).filter(Boolean);
+}
+
+function normalizeAuthThrottlePolicy(value) {
+  const maxAttempts = Number(value?.maxAttempts || 0);
+  const windowMinutes = Number(value?.windowMinutes || 0);
+  const lockMinutes = Number(value?.lockMinutes || 0);
+  return {
+    maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 0,
+    windowMinutes: Number.isFinite(windowMinutes) ? windowMinutes : 0,
+    lockMinutes: Number.isFinite(lockMinutes) ? lockMinutes : 0,
+  };
+}
+
+function normalizeAuthThrottle(value) {
+  const retryAfterSec = Number(value?.retryAfterSec || 0);
+  const remainingAttempts = Number(value?.remainingAttempts || 0);
+  return {
+    locked: Boolean(value?.locked),
+    retryAfterSec: Number.isFinite(retryAfterSec) ? retryAfterSec : 0,
+    lockedUntil: normalizeText(value?.lockedUntil || "") || null,
+    remainingAttempts: Number.isFinite(remainingAttempts) ? remainingAttempts : 0,
+  };
+}
+
+function resetAuthRuntimeState() {
+  state.auth.configWarnings = [];
+  state.auth.throttlePolicy = normalizeAuthThrottlePolicy();
+  state.auth.throttle = normalizeAuthThrottle();
 }
 
 function showAdminLoginModal(message = "") {
@@ -948,7 +1017,11 @@ function showAdminLoginModal(message = "") {
   const msgEl = document.getElementById("adminLoginMessage");
   const idEl = document.getElementById("adminLoginId");
   const pwEl = document.getElementById("adminLoginPassword");
-  if (msgEl) msgEl.textContent = message || "管理画面を利用するにはログインしてください。";
+  const baseMessage = message || "管理画面を利用するにはログインしてください。";
+  const hasWarnings = Array.isArray(state.auth.configWarnings) && state.auth.configWarnings.length > 0;
+  if (msgEl) {
+    msgEl.textContent = hasWarnings ? `${baseMessage}\n設定警告: ${state.auth.configWarnings.join(" / ")}` : baseMessage;
+  }
   if (idEl && !idEl.value) idEl.value = state.auth.loginIdHint || "admin";
   if (pwEl) pwEl.value = "";
   modal.classList.remove("hidden");
@@ -1007,12 +1080,16 @@ async function fetchAdminAuthConfig() {
     const data = await apiRequest("/api/auth/config", { skipAuthHandling: true });
     state.auth.enabled = !!data?.enabled;
     state.auth.loginIdHint = normalizeText(data?.loginIdHint || "admin") || "admin";
+    state.auth.configWarnings = normalizeAuthWarnings(data?.warnings);
+    state.auth.throttlePolicy = normalizeAuthThrottlePolicy(data?.throttlePolicy);
+    state.auth.throttle = normalizeAuthThrottle(data?.throttle);
     state.auth.checked = true;
     state.auth.configError = "";
   } catch (error) {
     state.auth.checked = true;
     state.auth.enabled = false;
     state.auth.configError = String(error?.message || error);
+    resetAuthRuntimeState();
   }
   updateAdminAuthUi();
 }

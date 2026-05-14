@@ -67,10 +67,14 @@ const AWS_TEXTRACT_ENABLED = parseBooleanEnv(process.env.AWS_TEXTRACT_ENABLED, f
 const ADMIN_AUTH_ENABLED = parseBooleanEnv(process.env.ADMIN_AUTH_ENABLED, false);
 const ADMIN_LOGIN_ID = String(process.env.ADMIN_LOGIN_ID || "admin").trim() || "admin";
 const ADMIN_LOGIN_PASSWORD = String(process.env.ADMIN_LOGIN_PASSWORD || "").trim();
+const ADMIN_SESSION_SECRET_RAW = String(process.env.ADMIN_SESSION_SECRET || "").trim();
 const ADMIN_SESSION_SECRET =
-  String(process.env.ADMIN_SESSION_SECRET || process.env.LINE_CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET_2 || "liive-admin-session")
+  String(ADMIN_SESSION_SECRET_RAW || process.env.LINE_CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET_2 || "liive-admin-session")
     .trim() || "liive-admin-session";
 const ADMIN_SESSION_TTL_HOURS = Math.min(168, Math.max(1, Number(process.env.ADMIN_SESSION_TTL_HOURS || 12)));
+const ADMIN_LOGIN_MAX_ATTEMPTS = Math.min(20, Math.max(1, Number(process.env.ADMIN_LOGIN_MAX_ATTEMPTS || 6)));
+const ADMIN_LOGIN_WINDOW_MINUTES = Math.min(180, Math.max(1, Number(process.env.ADMIN_LOGIN_WINDOW_MINUTES || 15)));
+const ADMIN_LOGIN_LOCK_MINUTES = Math.min(1440, Math.max(1, Number(process.env.ADMIN_LOGIN_LOCK_MINUTES || 30)));
 const ADMIN_AUTH_EXEMPT_PATHS = new Set(["/health", "/auth/config", "/auth/login"]);
 const BACKUP_ENABLED = parseBooleanEnv(process.env.BACKUP_ENABLED, false);
 const BACKUP_HOUR_JST = Math.min(23, Math.max(0, Number(process.env.BACKUP_HOUR_JST || 3)));
@@ -116,6 +120,7 @@ const backupState = {
   lastSkippedReason: "",
   lastRunDateJst: "",
 };
+const adminLoginAttempts = new Map();
 
 ensureDataFile();
 await initializeExternalPersistence();
@@ -541,12 +546,11 @@ app.get(MANUAL_PDF_URL_PATH, async (_req, res) => {
   return res.set("Content-Type", "application/pdf").set("Cache-Control", "no-store").send(resolved.buffer);
 });
 
-app.get("/api/auth/config", (_req, res) => {
+app.get("/api/auth/config", (req, res) => {
+  const config = buildAdminAuthConfigSnapshot(req);
   res.json({
     ok: true,
-    enabled: ADMIN_AUTH_ENABLED,
-    loginIdHint: ADMIN_LOGIN_ID,
-    sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
+    ...config,
   });
 });
 
@@ -560,6 +564,19 @@ app.post("/api/auth/login", (req, res) => {
       expiresAt: null,
     });
   }
+  const throttle = getAdminLoginThrottleState(req);
+  if (throttle.locked) {
+    return res
+      .status(429)
+      .set("Retry-After", String(throttle.retryAfterSec))
+      .json({
+        ok: false,
+        error: `ログイン試行が一時ロックされています。${throttle.retryAfterSec}秒後に再試行してください。`,
+        code: "AUTH_RATE_LIMITED",
+        retryAfterSec: throttle.retryAfterSec,
+        lockedUntil: throttle.lockedUntilIso,
+      });
+  }
   if (!ADMIN_LOGIN_PASSWORD) {
     return res.status(500).json({
       ok: false,
@@ -572,12 +589,27 @@ app.post("/api/auth/login", (req, res) => {
   const idOk = secureTextMatch(loginId, ADMIN_LOGIN_ID);
   const passwordOk = secureTextMatch(password, ADMIN_LOGIN_PASSWORD);
   if (!idOk || !passwordOk) {
+    const failed = registerAdminLoginFailure(req);
+    if (failed.locked) {
+      return res
+        .status(429)
+        .set("Retry-After", String(failed.retryAfterSec))
+        .json({
+          ok: false,
+          error: `ログイン試行が上限に達しました。${failed.lockMinutes}分後に再試行してください。`,
+          code: "AUTH_RATE_LIMITED",
+          retryAfterSec: failed.retryAfterSec,
+          lockedUntil: failed.lockedUntilIso,
+        });
+    }
     return res.status(401).json({
       ok: false,
       error: "ログインIDまたはパスワードが正しくありません",
       code: "AUTH_INVALID_CREDENTIALS",
+      remainingAttempts: failed.remainingAttempts,
     });
   }
+  clearAdminLoginFailure(req);
   const nowSec = Math.floor(Date.now() / 1000);
   const expSec = nowSec + Math.round(ADMIN_SESSION_TTL_HOURS * 60 * 60);
   const token = createAdminSessionToken({
@@ -4293,6 +4325,121 @@ function secureTextMatch(input, expected) {
   const left = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(input || "")).digest();
   const right = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(expected || "")).digest();
   return crypto.timingSafeEqual(left, right);
+}
+
+function extractClientIp(req) {
+  const forwarded = String(req.get("x-forwarded-for") || "")
+    .split(",")
+    .map((value) => value.trim())
+    .find(Boolean);
+  const rawIp = forwarded || String(req.ip || req.socket?.remoteAddress || "unknown");
+  return rawIp.replace(/^::ffff:/, "");
+}
+
+function normalizeAdminLoginAttemptEntry(entry, nowMs = Date.now()) {
+  const windowMs = ADMIN_LOGIN_WINDOW_MINUTES * 60 * 1000;
+  const rawFailures = Array.isArray(entry?.failures) ? entry.failures : [];
+  const failures = rawFailures.filter((timeMs) => Number.isFinite(timeMs) && nowMs - Number(timeMs) <= windowMs);
+  const lockedUntilMs = Number(entry?.lockedUntilMs || 0);
+  return {
+    failures,
+    lockedUntilMs: lockedUntilMs > nowMs ? lockedUntilMs : 0,
+  };
+}
+
+function getAdminLoginThrottleState(req) {
+  const ip = extractClientIp(req);
+  const nowMs = Date.now();
+  const normalized = normalizeAdminLoginAttemptEntry(adminLoginAttempts.get(ip), nowMs);
+  if (normalized.failures.length || normalized.lockedUntilMs > nowMs) {
+    adminLoginAttempts.set(ip, normalized);
+  } else {
+    adminLoginAttempts.delete(ip);
+  }
+  if (adminLoginAttempts.size > 3000) {
+    for (const [key, value] of adminLoginAttempts.entries()) {
+      const next = normalizeAdminLoginAttemptEntry(value, nowMs);
+      if (!next.failures.length && next.lockedUntilMs <= nowMs) adminLoginAttempts.delete(key);
+    }
+  }
+  const locked = normalized.lockedUntilMs > nowMs;
+  const retryAfterSec = locked ? Math.max(1, Math.ceil((normalized.lockedUntilMs - nowMs) / 1000)) : 0;
+  const remainingAttempts = locked ? 0 : Math.max(0, ADMIN_LOGIN_MAX_ATTEMPTS - normalized.failures.length);
+  return {
+    ip,
+    nowMs,
+    failures: normalized.failures,
+    locked,
+    retryAfterSec,
+    remainingAttempts,
+    lockedUntilMs: normalized.lockedUntilMs,
+    lockedUntilIso: locked ? new Date(normalized.lockedUntilMs).toISOString() : null,
+  };
+}
+
+function registerAdminLoginFailure(req) {
+  const base = getAdminLoginThrottleState(req);
+  const nextFailures = [...base.failures, base.nowMs];
+  let lockedUntilMs = 0;
+  let locked = false;
+  if (nextFailures.length >= ADMIN_LOGIN_MAX_ATTEMPTS) {
+    locked = true;
+    lockedUntilMs = base.nowMs + ADMIN_LOGIN_LOCK_MINUTES * 60 * 1000;
+    nextFailures.length = 0;
+  }
+  adminLoginAttempts.set(base.ip, {
+    failures: nextFailures,
+    lockedUntilMs,
+  });
+  const retryAfterSec = locked ? Math.max(1, Math.ceil((lockedUntilMs - base.nowMs) / 1000)) : 0;
+  return {
+    locked,
+    retryAfterSec,
+    lockedUntilIso: locked ? new Date(lockedUntilMs).toISOString() : null,
+    remainingAttempts: locked ? 0 : Math.max(0, ADMIN_LOGIN_MAX_ATTEMPTS - nextFailures.length),
+    lockMinutes: ADMIN_LOGIN_LOCK_MINUTES,
+  };
+}
+
+function clearAdminLoginFailure(req) {
+  const ip = extractClientIp(req);
+  adminLoginAttempts.delete(ip);
+}
+
+function buildAdminAuthConfigWarnings() {
+  const warnings = [];
+  if (!ADMIN_LOGIN_PASSWORD) warnings.push("ADMIN_LOGIN_PASSWORD is not configured");
+  if (!ADMIN_SESSION_SECRET_RAW && !process.env.LINE_CHANNEL_SECRET && !process.env.LINE_CHANNEL_SECRET_2) {
+    warnings.push("ADMIN_SESSION_SECRET is not configured");
+  }
+  if (ADMIN_LOGIN_ID === "admin") warnings.push("ADMIN_LOGIN_ID is using default value");
+  return warnings;
+}
+
+function buildAdminAuthConfigSnapshot(req) {
+  const warnings = buildAdminAuthConfigWarnings();
+  const throttle = getAdminLoginThrottleState(req);
+  const secretConfigured = Boolean(ADMIN_SESSION_SECRET_RAW || process.env.LINE_CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET_2);
+  return {
+    enabled: ADMIN_AUTH_ENABLED,
+    loginIdHint: ADMIN_LOGIN_ID,
+    sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
+    passwordConfigured: Boolean(ADMIN_LOGIN_PASSWORD),
+    sessionSecretConfigured: Boolean(ADMIN_SESSION_SECRET_RAW),
+    configValid: !ADMIN_AUTH_ENABLED || (Boolean(ADMIN_LOGIN_PASSWORD) && secretConfigured),
+    warnings,
+    throttlePolicy: {
+      maxAttempts: ADMIN_LOGIN_MAX_ATTEMPTS,
+      windowMinutes: ADMIN_LOGIN_WINDOW_MINUTES,
+      lockMinutes: ADMIN_LOGIN_LOCK_MINUTES,
+    },
+    throttle: {
+      locked: throttle.locked,
+      retryAfterSec: throttle.retryAfterSec,
+      lockedUntil: throttle.lockedUntilIso,
+      remainingAttempts: throttle.remainingAttempts,
+    },
+  };
 }
 
 function createAdminSessionToken(payload) {
