@@ -3060,22 +3060,23 @@ async function initializeExternalPersistence() {
 async function loadRemoteStateFromSupabase() {
   if (!supabase) return null;
   const attempts = [
-    () =>
-      supabase
-        .from(SUPABASE_STATE_TABLE)
-        .select("data,updated_at")
-        .eq("tenant_id", APP_TENANT_ID)
-        .eq("state_key", SUPABASE_STATE_KEY)
-        .limit(1),
-    () => supabase.from(SUPABASE_STATE_TABLE).select("data,updated_at").eq("state_key", SUPABASE_STATE_KEY).limit(1),
-    () => supabase.from(SUPABASE_STATE_TABLE).select("data,updated_at").eq("key", SUPABASE_STATE_KEY).limit(1),
+    {
+      label: "tenant_state_key",
+      query: () =>
+        supabase
+          .from(SUPABASE_STATE_TABLE)
+          .select("data,updated_at")
+          .eq("tenant_id", APP_TENANT_ID)
+          .eq("state_key", SUPABASE_STATE_KEY)
+          .limit(1),
+    },
   ];
 
-  for (const queryFactory of attempts) {
+  for (const attempt of attempts) {
     try {
-      const { data, error } = await queryFactory();
+      const { data, error } = await attempt.query();
       if (error) {
-        remoteStateSync.lastWarning = String(error?.message || error);
+        remoteStateSync.lastWarning = `[${attempt.label}] ${String(error?.message || error)}`;
         continue;
       }
       const row = Array.isArray(data) && data[0] && typeof data[0].data === "object" ? data[0] : null;
@@ -3083,7 +3084,7 @@ async function loadRemoteStateFromSupabase() {
       remoteStateSync.lastSyncedAt = row.updated_at || new Date().toISOString();
       return hydrateDbShape(row.data);
     } catch (error) {
-      remoteStateSync.lastWarning = String(error?.message || error);
+      remoteStateSync.lastWarning = `[${attempt.label}] ${String(error?.message || error)}`;
     }
   }
   return null;
@@ -3118,6 +3119,7 @@ async function upsertRemoteStateToSupabase(data) {
   if (!supabase) return false;
   const payloads = [
     {
+      label: "tenant_state_key",
       row: {
         tenant_id: APP_TENANT_ID,
         state_key: SUPABASE_STATE_KEY,
@@ -3125,22 +3127,6 @@ async function upsertRemoteStateToSupabase(data) {
         updated_at: new Date().toISOString(),
       },
       onConflict: "tenant_id,state_key",
-    },
-    {
-      row: {
-        state_key: SUPABASE_STATE_KEY,
-        data,
-        updated_at: new Date().toISOString(),
-      },
-      onConflict: "state_key",
-    },
-    {
-      row: {
-        key: SUPABASE_STATE_KEY,
-        data,
-        updated_at: new Date().toISOString(),
-      },
-      onConflict: "key",
     },
   ];
 
@@ -3152,9 +3138,9 @@ async function upsertRemoteStateToSupabase(data) {
         remoteStateSync.lastError = "";
         return true;
       }
-      remoteStateSync.lastWarning = String(error?.message || error);
+      remoteStateSync.lastWarning = `[${candidate.label}] ${String(error?.message || error)}`;
     } catch (error) {
-      remoteStateSync.lastWarning = String(error?.message || error);
+      remoteStateSync.lastWarning = `[${candidate.label}] ${String(error?.message || error)}`;
     }
   }
   remoteStateSync.lastError = remoteStateSync.lastWarning || "remote sync failed";
