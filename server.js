@@ -3059,6 +3059,7 @@ async function initializeExternalPersistence() {
 
 async function loadRemoteStateFromSupabase() {
   if (!supabase) return null;
+  let attemptWarning = "";
   const attempts = [
     {
       label: "tenant_state_key",
@@ -3076,17 +3077,20 @@ async function loadRemoteStateFromSupabase() {
     try {
       const { data, error } = await attempt.query();
       if (error) {
-        remoteStateSync.lastWarning = `[${attempt.label}] ${String(error?.message || error)}`;
+        attemptWarning = `[${attempt.label}] ${String(error?.message || error)}`;
         continue;
       }
       const row = Array.isArray(data) && data[0] && typeof data[0].data === "object" ? data[0] : null;
       if (!row) continue;
       remoteStateSync.lastSyncedAt = row.updated_at || new Date().toISOString();
+      remoteStateSync.lastError = "";
+      remoteStateSync.lastWarning = "";
       return hydrateDbShape(row.data);
     } catch (error) {
-      remoteStateSync.lastWarning = `[${attempt.label}] ${String(error?.message || error)}`;
+      attemptWarning = `[${attempt.label}] ${String(error?.message || error)}`;
     }
   }
+  remoteStateSync.lastWarning = attemptWarning;
   return null;
 }
 
@@ -3136,6 +3140,7 @@ async function upsertRemoteStateToSupabase(data) {
       if (!error) {
         remoteStateSync.lastSyncedAt = new Date().toISOString();
         remoteStateSync.lastError = "";
+        remoteStateSync.lastWarning = "";
         return true;
       }
       remoteStateSync.lastWarning = `[${candidate.label}] ${String(error?.message || error)}`;
