@@ -544,6 +544,20 @@ button {
   background: color-mix(in srgb, var(--surface-soft) 45%, #fff 55%);
 }
 
+.inline-check {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.inline-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
 .shift-form {
   display: grid;
   grid-template-columns: 1.1fr 1fr 0.8fr 0.8fr 1fr auto;

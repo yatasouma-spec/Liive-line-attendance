@@ -29,6 +29,7 @@
           <button type="button" class="nav-link" data-view="records">勤怠履歴</button>
           <button type="button" class="nav-link" data-view="summary">月次集計</button>
           <button type="button" class="nav-link" data-view="corrections">修正対応</button>
+          <button type="button" class="nav-link" data-view="behavior">姿勢報告</button>
           <button type="button" class="nav-link" data-view="masters">社員/現場設定</button>
           <button type="button" class="nav-link" data-view="shifts">シフト管理</button>
           <button type="button" class="nav-link" data-view="leaves">休暇申請管理</button>
@@ -328,6 +329,105 @@
                   </tr>
                 </thead>
                 <tbody id="correctionDeskBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="behavior">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>姿勢報告設定（退勤時チェック）</h2>
+              <strong id="behaviorConfigStatus">未保存</strong>
+            </div>
+            <p class="section-lead">退勤時に社員が ①〜③ を自己採点（○/✖）し、✖ の時は理由を記入します。管理者は必要時に✖判定コメントを返せます。</p>
+            <form id="behaviorConfigForm" class="master-form">
+              <input id="behaviorLabel1" type="text" placeholder="①の項目名" required />
+              <input id="behaviorLabel2" type="text" placeholder="②の項目名" required />
+              <input id="behaviorLabel3" type="text" placeholder="③の項目名" required />
+              <input id="behaviorFailReasonMax" type="number" min="10" max="200" step="1" placeholder="✖理由の上限文字数" disabled />
+              <input id="behaviorRevisionCommand" type="text" placeholder="社員向け修正コマンド（例: 姿勢報告修正）" />
+              <button type="submit" class="btn">姿勢報告設定を保存</button>
+            </form>
+            <form id="behaviorReminderForm" class="master-form policy-form">
+              <label class="inline-check"><input id="behaviorReminderEnabled" type="checkbox" /> 未報告者へリマインド送信を有効化</label>
+              <input id="behaviorReminderTime" type="time" />
+              <button type="submit" class="btn btn-ghost">リマインド設定を保存</button>
+              <button type="button" class="btn btn-ghost" id="behaviorReminderNowBtn">今すぐ未報告者へ送信</button>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>指示書（PDF）</h2>
+              <strong id="behaviorInstructionMeta">未登録</strong>
+            </div>
+            <p class="section-lead">最新版のみを保存します。更新すると前回版は置き換わります。</p>
+            <form id="instructionPdfForm" class="master-form">
+              <input id="instructionPdfFile" type="file" accept="application/pdf,.pdf" />
+              <button type="submit" class="btn">PDFを更新</button>
+              <a id="instructionPdfLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener noreferrer" hidden>最新版PDFを開く</a>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>姿勢報告一覧</h2>
+              <strong id="behaviorReportCount">0件</strong>
+            </div>
+            <div class="filters filter-toolbar">
+              <label class="toolbar-field">開始日<input id="behaviorDateFrom" type="date" /></label>
+              <label class="toolbar-field">終了日<input id="behaviorDateTo" type="date" /></label>
+              <label class="toolbar-field">社員<select id="behaviorEmployeeFilter"></select></label>
+              <label class="toolbar-field">状態
+                <select id="behaviorStatusFilter">
+                  <option value="all">すべて</option>
+                  <option value="submitted">提出済み</option>
+                  <option value="needs_revision">要修正</option>
+                  <option value="resubmitted">再提出済み</option>
+                  <option value="manager_checked">管理者確認済み</option>
+                  <option value="closed">クローズ</option>
+                </select>
+              </label>
+              <div class="geo-action-row">
+                <button type="button" class="btn" id="behaviorFilterBtn">表示</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>提出日時</th>
+                    <th>対象日</th>
+                    <th>社員</th>
+                    <th>自己報告</th>
+                    <th>管理者判定</th>
+                    <th>状態</th>
+                    <th>修正期限</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="behaviorReportBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>未報告一覧（退勤済み）</h2>
+              <strong id="behaviorMissingCount">0件</strong>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>対象日</th>
+                    <th>社員</th>
+                    <th>現場</th>
+                    <th>状態</th>
+                  </tr>
+                </thead>
+                <tbody id="behaviorMissingBody"></tbody>
               </table>
             </div>
           </section>

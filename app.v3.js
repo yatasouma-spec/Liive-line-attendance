@@ -85,6 +85,43 @@ const state = {
   startSites: loadJson(START_SITES_KEY, []),
   endSites: loadJson(END_SITES_KEY, []),
   employeeSiteLinks: loadJson(EMPLOYEE_SITE_LINK_KEY, []),
+  behavior: {
+    settings: {
+      enabled: true,
+      labels: ["人への姿勢", "職場への姿勢", "責任・判断への姿勢"],
+      failReasonMaxLength: 50,
+      revisionCommand: "姿勢報告修正",
+    },
+    reminder: {
+      enabled: false,
+      hourJst: 19,
+      minuteJst: 0,
+    },
+    instruction: {
+      exists: false,
+      publicUrl: "",
+      fileName: "",
+      sizeBytes: 0,
+      uploadedAt: null,
+      uploadedBy: "",
+    },
+    reports: [],
+    missing: [],
+    summary: {
+      total: 0,
+      submitted: 0,
+      needs_revision: 0,
+      resubmitted: 0,
+      manager_checked: 0,
+      closed: 0,
+    },
+    filters: {
+      dateFrom: "",
+      dateTo: "",
+      employee: "",
+      status: "all",
+    },
+  },
   auth: {
     enabled: false,
     checked: false,
@@ -105,6 +142,7 @@ const viewTitle = {
   records: "勤怠履歴",
   summary: "月次集計",
   corrections: "修正対応",
+  behavior: "姿勢報告",
   masters: "社員/現場設定",
   shifts: "シフト管理",
   leaves: "休暇申請管理",
@@ -1027,6 +1065,8 @@ async function loginAdmin(loginId, password) {
     await pullSnapshot();
     await fetchLineUsers();
     await fetchShiftDeliveryStatus();
+    await fetchBehaviorConfig();
+    await fetchBehaviorReports();
     return true;
   } catch (error) {
     showAdminLoginModal(String(error?.message || "ログインに失敗しました"));
@@ -1307,6 +1347,15 @@ function populateSelectors() {
     routeNameList.innerHTML = activeRoutes().map((r) => `<option value="${r.name}"></option>`).join("");
   }
 
+  const behaviorEmployeeFilter = document.getElementById("behaviorEmployeeFilter");
+  if (behaviorEmployeeFilter) {
+    const prev = behaviorEmployeeFilter.value || state.behavior.filters.employee || "";
+    behaviorEmployeeFilter.innerHTML = `<option value="">全社員</option>${activeEmployees()
+      .map((e) => `<option value="${e.name}">${e.name}</option>`)
+      .join("")}`;
+    if (prev && [...behaviorEmployeeFilter.options].some((o) => o.value === prev)) behaviorEmployeeFilter.value = prev;
+  }
+
   ["lineSite", "shiftRoute"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1566,6 +1615,142 @@ function renderCorrectionDesk() {
       </tr>`;
     })
     .join("");
+}
+
+function behaviorStatusClass(status) {
+  if (status === "needs_revision") return "danger";
+  if (status === "submitted" || status === "resubmitted") return "warn";
+  return "ok";
+}
+
+function behaviorStatusLabel(status) {
+  if (status === "submitted") return "提出済み";
+  if (status === "needs_revision") return "要修正";
+  if (status === "resubmitted") return "再提出済み";
+  if (status === "manager_checked") return "管理者確認済み";
+  if (status === "closed") return "クローズ";
+  return status || "-";
+}
+
+function formatBehaviorMark(mark) {
+  return mark === "fail" ? "✖" : "○";
+}
+
+function formatIsoDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "-");
+  return date.toLocaleString("ja-JP");
+}
+
+function renderBehaviorView() {
+  const behavior = state.behavior || {};
+  const settings = behavior.settings || {};
+  const reminder = behavior.reminder || {};
+  const instruction = behavior.instruction || {};
+  const filters = behavior.filters || {};
+
+  const configStatus = document.getElementById("behaviorConfigStatus");
+  if (configStatus) {
+    const labels = Array.isArray(settings.labels) ? settings.labels : [];
+    configStatus.textContent = labels.length ? "設定済み" : "未設定";
+  }
+
+  const label1 = document.getElementById("behaviorLabel1");
+  const label2 = document.getElementById("behaviorLabel2");
+  const label3 = document.getElementById("behaviorLabel3");
+  const reasonMax = document.getElementById("behaviorFailReasonMax");
+  const revisionCommand = document.getElementById("behaviorRevisionCommand");
+  if (label1) label1.value = settings.labels?.[0] || "";
+  if (label2) label2.value = settings.labels?.[1] || "";
+  if (label3) label3.value = settings.labels?.[2] || "";
+  if (reasonMax) reasonMax.value = String(settings.failReasonMaxLength || 50);
+  if (revisionCommand) revisionCommand.value = settings.revisionCommand || "姿勢報告修正";
+
+  const reminderEnabled = document.getElementById("behaviorReminderEnabled");
+  const reminderTime = document.getElementById("behaviorReminderTime");
+  if (reminderEnabled) reminderEnabled.checked = reminder.enabled === true;
+  if (reminderTime) {
+    const hh = String(Math.max(0, Math.min(23, Number(reminder.hourJst || 0)))).padStart(2, "0");
+    const mm = String(Math.max(0, Math.min(59, Number(reminder.minuteJst || 0)))).padStart(2, "0");
+    reminderTime.value = `${hh}:${mm}`;
+  }
+  const dateFromEl = document.getElementById("behaviorDateFrom");
+  const dateToEl = document.getElementById("behaviorDateTo");
+  const statusFilterEl = document.getElementById("behaviorStatusFilter");
+  if (dateFromEl && filters.dateFrom) dateFromEl.value = filters.dateFrom;
+  if (dateToEl && filters.dateTo) dateToEl.value = filters.dateTo;
+  if (statusFilterEl && filters.status) statusFilterEl.value = filters.status;
+
+  const instructionMeta = document.getElementById("behaviorInstructionMeta");
+  if (instructionMeta) {
+    instructionMeta.textContent = instruction.exists
+      ? `最終更新: ${formatIsoDateTime(instruction.uploadedAt)} / ${instruction.fileName || "latest-instruction.pdf"}`
+      : "未登録";
+  }
+  const instructionLink = document.getElementById("instructionPdfLink");
+  if (instructionLink instanceof HTMLAnchorElement) {
+    if (instruction.exists && instruction.publicUrl) {
+      instructionLink.hidden = false;
+      instructionLink.href = instruction.publicUrl;
+    } else {
+      instructionLink.hidden = true;
+      instructionLink.href = "#";
+    }
+  }
+
+  const reportBody = document.getElementById("behaviorReportBody");
+  const reportCount = document.getElementById("behaviorReportCount");
+  const reports = Array.isArray(behavior.reports) ? behavior.reports : [];
+  if (reportCount) reportCount.textContent = `${reports.length}件`;
+  if (reportBody) {
+    reportBody.innerHTML = reports.length
+      ? reports
+          .map((row) => {
+            const selfSummary = (row.items || [])
+              .map((item) => `${item.index}${formatBehaviorMark(item.selfMark)}${item.selfReason ? `(${escapeHtml(item.selfReason)})` : ""}`)
+              .join(" ");
+            const managerSummary = Array.isArray(row.managerReview?.items)
+              ? row.managerReview.items
+                  .map((item) => `${item.index}${formatBehaviorMark(item.managerMark)}${item.managerComment ? `(${escapeHtml(item.managerComment)})` : ""}`)
+                  .join(" ")
+              : "-";
+            const status = String(row.status || "");
+            const canReview = status !== "closed";
+            const closeBtn = status !== "closed" ? `<button class="btn btn-ghost" data-close-behavior="${row.id}">クローズ</button>` : "";
+            return `<tr>
+              <td>${formatIsoDateTime(row.submittedAt)}</td>
+              <td>${row.attendanceDate || "-"}</td>
+              <td>${row.employee || "-"}</td>
+              <td>${selfSummary || "-"}</td>
+              <td>${managerSummary}</td>
+              <td><span class="badge ${behaviorStatusClass(status)}">${behaviorStatusLabel(status)}</span></td>
+              <td>${formatIsoDateTime(row.deadlineAt)}</td>
+              <td>${canReview ? `<button class="btn" data-review-behavior="${row.id}">判定</button>` : "-"} ${closeBtn}</td>
+            </tr>`;
+          })
+          .join("")
+      : '<tr><td class="empty" colspan="8">姿勢報告データはありません</td></tr>';
+  }
+
+  const missingRows = Array.isArray(behavior.missing) ? behavior.missing : [];
+  const missingBody = document.getElementById("behaviorMissingBody");
+  const missingCount = document.getElementById("behaviorMissingCount");
+  if (missingCount) missingCount.textContent = `${missingRows.length}件`;
+  if (missingBody) {
+    missingBody.innerHTML = missingRows.length
+      ? missingRows
+          .map(
+            (row) => `<tr>
+              <td>${row.attendanceDate || "-"}</td>
+              <td>${row.employee || "-"}</td>
+              <td>${row.site || "-"}</td>
+              <td><span class="badge warn">未報告</span></td>
+            </tr>`
+          )
+          .join("")
+      : '<tr><td class="empty" colspan="4">未報告はありません</td></tr>';
+  }
 }
 
 function renderLeaveRequests() {
@@ -1928,6 +2113,7 @@ function renderAll() {
   renderTimecards();
   renderSummary();
   renderCorrectionDesk();
+  renderBehaviorView();
   renderMasters();
   renderLeaveRequests();
   updateLineMapProgress();
@@ -2432,6 +2618,18 @@ function applySnapshot(snapshot) {
   if (snapshot.alcoholLimit !== undefined && snapshot.alcoholLimit !== null) {
     state.alcoholLimit = normalizeAlcoholLimit(snapshot.alcoholLimit);
   }
+  if (snapshot.behaviorSettings && typeof snapshot.behaviorSettings === "object") {
+    state.behavior.settings = {
+      ...state.behavior.settings,
+      ...snapshot.behaviorSettings,
+    };
+  }
+  if (snapshot.behaviorReminder && typeof snapshot.behaviorReminder === "object") {
+    state.behavior.reminder = {
+      ...state.behavior.reminder,
+      ...snapshot.behaviorReminder,
+    };
+  }
   if (Array.isArray(snapshot.logs)) {
     const mappedLogs = snapshot.logs.map((log) => ({
       employee: log.employee || "-",
@@ -2712,6 +2910,217 @@ async function fetchLineUsers() {
     reconcileLineDisplayNames();
     renderAllUnlessCorrectionEditing();
   } catch (_e) {}
+}
+
+function todayYmd() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function offsetYmd(days) {
+  const date = new Date();
+  date.setDate(date.getDate() + Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function ensureBehaviorFilterDates() {
+  if (!state.behavior.filters.dateFrom) state.behavior.filters.dateFrom = offsetYmd(-7);
+  if (!state.behavior.filters.dateTo) state.behavior.filters.dateTo = todayYmd();
+  const fromEl = document.getElementById("behaviorDateFrom");
+  const toEl = document.getElementById("behaviorDateTo");
+  if (fromEl && !fromEl.value) fromEl.value = state.behavior.filters.dateFrom;
+  if (toEl && !toEl.value) toEl.value = state.behavior.filters.dateTo;
+}
+
+function syncBehaviorFiltersFromUi() {
+  const from = normalizeText(document.getElementById("behaviorDateFrom")?.value || "");
+  const to = normalizeText(document.getElementById("behaviorDateTo")?.value || "");
+  const employee = normalizeText(document.getElementById("behaviorEmployeeFilter")?.value || "");
+  const status = normalizeText(document.getElementById("behaviorStatusFilter")?.value || "all") || "all";
+  state.behavior.filters = {
+    dateFrom: from || state.behavior.filters.dateFrom || offsetYmd(-7),
+    dateTo: to || state.behavior.filters.dateTo || todayYmd(),
+    employee,
+    status,
+  };
+}
+
+async function fetchBehaviorConfig() {
+  if (!API_ENABLED) return;
+  try {
+    const data = await apiRequest("/api/behavior/config");
+    if (!data?.ok) return;
+    state.behavior.settings = {
+      ...state.behavior.settings,
+      ...(data.settings || {}),
+    };
+    state.behavior.reminder = {
+      ...state.behavior.reminder,
+      ...(data.reminder || {}),
+    };
+    state.behavior.instruction = {
+      ...state.behavior.instruction,
+      ...(data.instruction || {}),
+    };
+    ensureBehaviorFilterDates();
+    renderAllUnlessCorrectionEditing();
+  } catch (_e) {}
+}
+
+async function fetchBehaviorReports() {
+  if (!API_ENABLED) return;
+  ensureBehaviorFilterDates();
+  const filters = state.behavior.filters || {};
+  const params = new URLSearchParams({
+    dateFrom: filters.dateFrom || offsetYmd(-7),
+    dateTo: filters.dateTo || todayYmd(),
+    employee: filters.employee || "",
+    status: filters.status || "all",
+  });
+  try {
+    const data = await apiRequest(`/api/behavior/reports?${params.toString()}`);
+    if (!data?.ok) return;
+    state.behavior.reports = Array.isArray(data.reports) ? data.reports : [];
+    state.behavior.missing = Array.isArray(data.missing) ? data.missing : [];
+    state.behavior.summary = data.summary || state.behavior.summary;
+    state.behavior.filters = {
+      ...state.behavior.filters,
+      ...(data.filters || {}),
+    };
+    renderAllUnlessCorrectionEditing();
+  } catch (_e) {}
+}
+
+async function saveBehaviorConfigToServer(payload) {
+  if (!API_ENABLED) return false;
+  try {
+    const data = await apiRequest("/api/behavior/config", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (!data?.ok) throw new Error("save failed");
+    state.behavior.settings = {
+      ...state.behavior.settings,
+      ...(data.settings || {}),
+    };
+    state.behavior.reminder = {
+      ...state.behavior.reminder,
+      ...(data.reminder || {}),
+    };
+    const status = document.getElementById("behaviorConfigStatus");
+    if (status) status.textContent = "保存済み";
+    renderAllUnlessCorrectionEditing();
+    return true;
+  } catch (_e) {
+    const status = document.getElementById("behaviorConfigStatus");
+    if (status) status.textContent = "保存失敗";
+    return false;
+  }
+}
+
+async function sendBehaviorReminderNow() {
+  if (!API_ENABLED) return;
+  try {
+    const data = await apiRequest("/api/behavior/reminder/send-now", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    alert(`未報告リマインド送信: ${Number(data?.sentCount || 0)}件`);
+    await fetchBehaviorReports();
+  } catch (error) {
+    alert(error?.message || "リマインド送信に失敗しました");
+  }
+}
+
+async function uploadInstructionPdf(file) {
+  if (!API_ENABLED) return false;
+  if (!(file instanceof File)) return false;
+  const token = state.auth?.token || "";
+  const headers = { "Content-Type": "application/pdf" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  try {
+    const response = await fetch("/api/manual/instruction-pdf", {
+      method: "POST",
+      headers,
+      body: await file.arrayBuffer(),
+    });
+    if (!response.ok) {
+      throw new Error(`PDFアップロード失敗 (${response.status})`);
+    }
+    const data = await response.json();
+    if (!data?.ok) throw new Error("PDFアップロード失敗");
+    state.behavior.instruction = {
+      ...state.behavior.instruction,
+      ...(data.instruction || {}),
+    };
+    renderAllUnlessCorrectionEditing();
+    return true;
+  } catch (error) {
+    alert(error?.message || "PDFアップロードに失敗しました");
+    return false;
+  }
+}
+
+async function reviewBehaviorReport(reportId, decision = "review") {
+  const row = (state.behavior.reports || []).find((r) => r.id === reportId);
+  if (!row) return;
+  if (decision === "close") {
+    const managerComment = window.prompt("クローズ時のコメント（任意）", row.managerReview?.managerComment || "") || "";
+    try {
+      await apiRequest(`/api/behavior/reports/${encodeURIComponent(reportId)}/review`, {
+        method: "POST",
+        body: JSON.stringify({
+          decision: "close",
+          marks: [],
+          managerComment: normalizeText(managerComment),
+        }),
+      });
+      await fetchBehaviorReports();
+      return;
+    } catch (error) {
+      alert(error?.message || "クローズに失敗しました");
+      return;
+    }
+  }
+
+  const marks = [];
+  for (const item of row.items || []) {
+    const selfLabel = item.selfMark === "fail" ? "✖" : "○";
+    const answer = window.prompt(
+      `${row.employee} / ${row.attendanceDate}\n${item.index}. ${item.label}\n自己: ${selfLabel}\n管理者判定を入力（○ / ✖ / 空欄=自己判定のまま）`,
+      ""
+    );
+    const normalized = normalizeText(answer || "");
+    let mark = "keep";
+    if (normalized.includes("✖") || normalized.includes("×") || normalized.toLowerCase().includes("x")) mark = "fail";
+    else if (normalized.includes("○") || normalized.includes("◯") || normalized.includes("〇")) mark = "pass";
+    let comment = "";
+    if (mark === "fail" && item.selfMark !== "fail") {
+      comment = window.prompt(`「${item.label}」を✖にする理由を入力`, "") || "";
+      if (!normalizeText(comment)) {
+        alert("✖判定時は理由が必要です。");
+        return;
+      }
+    }
+    marks.push({
+      index: Number(item.index || 0),
+      mark,
+      comment: normalizeText(comment),
+    });
+  }
+  const managerComment = window.prompt("管理者コメント（任意）", row.managerReview?.managerComment || "") || "";
+  try {
+    await apiRequest(`/api/behavior/reports/${encodeURIComponent(reportId)}/review`, {
+      method: "POST",
+      body: JSON.stringify({
+        decision: "review",
+        marks,
+        managerComment: normalizeText(managerComment),
+      }),
+    });
+    await fetchBehaviorReports();
+  } catch (error) {
+    alert(error?.message || "判定保存に失敗しました");
+  }
 }
 
 async function saveLineUserMapping(userId, employeeId, employeeName, site, lineChannel, siteLinkId, geo = {}) {
@@ -3792,6 +4201,78 @@ function bindEvents() {
     alert(created > 0 ? `未打刻日の修正候補を ${created} 件作成しました。` : "追加できる未打刻日の修正候補はありませんでした。");
   });
 
+  ensureBehaviorFilterDates();
+  const behaviorDateFrom = document.getElementById("behaviorDateFrom");
+  const behaviorDateTo = document.getElementById("behaviorDateTo");
+  const behaviorEmployeeFilter = document.getElementById("behaviorEmployeeFilter");
+  const behaviorStatusFilter = document.getElementById("behaviorStatusFilter");
+  if (behaviorDateFrom) behaviorDateFrom.value = state.behavior.filters.dateFrom;
+  if (behaviorDateTo) behaviorDateTo.value = state.behavior.filters.dateTo;
+  if (behaviorEmployeeFilter && state.behavior.filters.employee) behaviorEmployeeFilter.value = state.behavior.filters.employee;
+  if (behaviorStatusFilter) behaviorStatusFilter.value = state.behavior.filters.status || "all";
+  document.getElementById("behaviorFilterBtn")?.addEventListener("click", async () => {
+    syncBehaviorFiltersFromUi();
+    await fetchBehaviorReports();
+  });
+
+  document.getElementById("behaviorConfigForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const label1 = normalizeText(document.getElementById("behaviorLabel1")?.value || "");
+    const label2 = normalizeText(document.getElementById("behaviorLabel2")?.value || "");
+    const label3 = normalizeText(document.getElementById("behaviorLabel3")?.value || "");
+    const revisionCommand = normalizeText(document.getElementById("behaviorRevisionCommand")?.value || "姿勢報告修正");
+    if (!label1 || !label2 || !label3) {
+      alert("①〜③の項目名を入力してください。");
+      return;
+    }
+    const ok = await saveBehaviorConfigToServer({
+      settings: {
+        labels: [label1, label2, label3],
+        revisionCommand,
+      },
+      reminder: state.behavior.reminder,
+    });
+    if (ok) alert("姿勢報告設定を保存しました。");
+  });
+
+  document.getElementById("behaviorReminderForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const enabled = document.getElementById("behaviorReminderEnabled")?.checked === true;
+    const time = normalizeText(document.getElementById("behaviorReminderTime")?.value || "19:00");
+    const [hourRaw, minuteRaw] = time.split(":");
+    const hourJst = Math.max(0, Math.min(23, Number(hourRaw || 19)));
+    const minuteJst = Math.max(0, Math.min(59, Number(minuteRaw || 0)));
+    const ok = await saveBehaviorConfigToServer({
+      settings: state.behavior.settings,
+      reminder: {
+        ...state.behavior.reminder,
+        enabled,
+        hourJst,
+        minuteJst,
+      },
+    });
+    if (ok) alert("リマインド設定を保存しました。");
+  });
+
+  document.getElementById("behaviorReminderNowBtn")?.addEventListener("click", () => {
+    sendBehaviorReminderNow();
+  });
+
+  document.getElementById("instructionPdfForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("instructionPdfFile");
+    if (!(input instanceof HTMLInputElement) || !input.files?.length) {
+      alert("PDFファイルを選択してください。");
+      return;
+    }
+    const ok = await uploadInstructionPdf(input.files[0]);
+    if (ok) {
+      alert("最新版PDFを更新しました。");
+      input.value = "";
+      await fetchBehaviorConfig();
+    }
+  });
+
   document.getElementById("captureGpsBtn")?.addEventListener("click", captureGps);
   document.getElementById("startSiteUseMapUrlBtn")?.addEventListener("click", async () => {
     await fillGeoFromMapUrl("startSite");
@@ -3880,6 +4361,20 @@ function bindEvents() {
     persist();
   });
 
+  document.getElementById("behaviorReportBody")?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const reviewId = target.getAttribute("data-review-behavior");
+    if (reviewId) {
+      reviewBehaviorReport(reviewId, "review");
+      return;
+    }
+    const closeId = target.getAttribute("data-close-behavior");
+    if (closeId) {
+      reviewBehaviorReport(closeId, "close");
+    }
+  });
+
   bindMasterEvents();
 }
 
@@ -3894,11 +4389,15 @@ async function ensureApiPollingStarted() {
   await pullSnapshot();
   await fetchLineUsers();
   await fetchShiftDeliveryStatus();
+  await fetchBehaviorConfig();
+  await fetchBehaviorReports();
   syncShiftPlansToServer();
   syncEmployeesToServer();
   state.apiPollingTimers.push(setInterval(pullSnapshot, API_POLL_MS));
   state.apiPollingTimers.push(setInterval(fetchLineUsers, API_POLL_MS * 2));
   state.apiPollingTimers.push(setInterval(fetchShiftDeliveryStatus, API_POLL_MS * 6));
+  state.apiPollingTimers.push(setInterval(fetchBehaviorReports, API_POLL_MS * 3));
+  state.apiPollingTimers.push(setInterval(fetchBehaviorConfig, API_POLL_MS * 12));
 }
 
 async function init() {

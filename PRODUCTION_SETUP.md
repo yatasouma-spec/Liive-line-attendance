@@ -85,6 +85,13 @@ open "http://localhost:3000/index.html"
 - `BACKUP_SUPABASE_BUCKET`（任意: 未指定なら `SUPABASE_STORAGE_BUCKET` を利用）
 - `BACKUP_SUPABASE_PREFIX`（任意: 既定 `backups`）
 
+### 5-6. 姿勢報告（退勤時チェック）
+- `BEHAVIOR_REPORT_ENABLED`（任意: 既定 `true`）
+- `BEHAVIOR_FAIL_REASON_MAX`（任意: 既定 `50`）
+- `BEHAVIOR_DATA_RETENTION_DAYS`（任意: 既定 `365`）
+- `BEHAVIOR_REMINDER_DEFAULT_HOUR_JST`（任意: 既定 `19`）
+- `BEHAVIOR_REMINDER_DEFAULT_MINUTE_JST`（任意: 既定 `0`）
+
 ### LINE_USER_MAP_JSON 例
 ```json
 {
@@ -116,8 +123,11 @@ open "http://localhost:3000/index.html"
 2. 管理ツール `LINE勤怠` 画面でステータスが更新される
 3. `休憩開始` → `休憩終了` を送る
 4. `退勤` を送る
-5. 月次集計に勤務時間/休憩/残業が反映される
-6. LINEで `マニュアル確認` を送って、社員マニュアルURLが返る
+5. 続けて姿勢報告（①〜③の○/✖、✖理由）を入力できる
+6. 管理画面「姿勢報告」で一覧・管理者判定・未報告一覧が確認できる
+7. 指示書PDFをアップロードし、`/manual/latest-instruction.pdf` で開ける
+8. 月次集計に勤務時間/休憩/残業が反映される
+9. LINEで `マニュアル確認` を送って、社員マニュアルURLとPDFリンクが返る
 
 ## 8. 本番前チェック
 - HTTPSドメインで公開されている

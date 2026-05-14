@@ -78,6 +78,15 @@ const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const BACKUP_SUPABASE_UPLOAD = parseBooleanEnv(process.env.BACKUP_SUPABASE_UPLOAD, false);
 const BACKUP_SUPABASE_BUCKET = String(process.env.BACKUP_SUPABASE_BUCKET || SUPABASE_STORAGE_BUCKET || "").trim();
 const BACKUP_SUPABASE_PREFIX = String(process.env.BACKUP_SUPABASE_PREFIX || "backups").trim() || "backups";
+const BEHAVIOR_REPORT_ENABLED = parseBooleanEnv(process.env.BEHAVIOR_REPORT_ENABLED, true);
+const BEHAVIOR_FAIL_REASON_MAX = Math.min(200, Math.max(10, Number(process.env.BEHAVIOR_FAIL_REASON_MAX || 50)));
+const BEHAVIOR_DATA_RETENTION_DAYS = Math.min(3650, Math.max(30, Number(process.env.BEHAVIOR_DATA_RETENTION_DAYS || 365)));
+const BEHAVIOR_REMINDER_DEFAULT_HOUR_JST = Math.min(23, Math.max(0, Number(process.env.BEHAVIOR_REMINDER_DEFAULT_HOUR_JST || 19)));
+const BEHAVIOR_REMINDER_DEFAULT_MINUTE_JST = Math.min(59, Math.max(0, Number(process.env.BEHAVIOR_REMINDER_DEFAULT_MINUTE_JST || 0)));
+const MANUAL_DATA_DIR = path.join(DATA_DIR, "manual");
+const MANUAL_PDF_FILENAME = "latest-instruction.pdf";
+const MANUAL_PDF_FILE = path.join(MANUAL_DATA_DIR, MANUAL_PDF_FILENAME);
+const MANUAL_PDF_URL_PATH = "/manual/latest-instruction.pdf";
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -109,6 +118,7 @@ const backupState = {
 ensureDataFile();
 await initializeExternalPersistence();
 initializeBackupDirectory();
+ensureManualDataDirectory();
 
 app.post("/line/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const body = req.body;
@@ -262,7 +272,8 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       continue;
     }
     if (isManualCommand(text)) {
-      await replyToEvent(buildManualGuideMessage(manualUrl), {
+      const instruction = resolveManualInstructionInfo(db, req);
+      await replyToEvent(buildManualGuideMessage(manualUrl, instruction.publicUrl), {
         withQuickReply: true,
         quickReplyType: "manual",
         manualUrl,
@@ -345,6 +356,23 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
             source: "LINE",
             lineUserId: userId,
           });
+          if (pendingConfirm.action === "checkout") {
+            const flowDb = readDb();
+            const started = startBehaviorSubmissionFlow(flowDb, userId, {
+              employee: pendingConfirm.employee,
+              site: pendingConfirm.site,
+              checkoutTime: snapshot?.lineSync?.time || "",
+              date: snapshot?.lineSync?.dateISO ? String(snapshot.lineSync.dateISO).slice(0, 10) : "",
+              lineChannel: inboundChannelId,
+            });
+            writeDb(flowDb);
+            await replyToEvent(started.message, {
+              withQuickReply: started.withQuickReply === true,
+              quickReplyType: started.quickReplyType || "attendance",
+              behaviorItemIndex: Number.isFinite(Number(started.itemIndex)) ? Number(started.itemIndex) : 1,
+            });
+            continue;
+          }
           const msg = `受け付けました: ${pendingConfirm.employee} / ${pendingConfirm.site} / ${actionLabel(pendingConfirm.action)} (${snapshot.lineSync?.time || "-"})`;
           await replyToEvent(msg, { withQuickReply: true });
         } catch (error) {
@@ -403,6 +431,35 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
       }
       continue;
     }
+    if (flow?.type === "behavior_report") {
+      const advanced = advanceBehaviorReportFlow(db, userId, text, {
+        employee,
+        site,
+        lineUserId: userId,
+        lineChannel: inboundChannelId,
+      });
+      writeDb(db);
+      await replyToEvent(advanced.message, {
+        withQuickReply: advanced.withQuickReply === true,
+        quickReplyType: advanced.quickReplyType || "attendance",
+        behaviorItemIndex: Number.isFinite(Number(advanced.itemIndex)) ? Number(advanced.itemIndex) : 1,
+      });
+      continue;
+    }
+    if (isBehaviorReportRevisionCommand(text)) {
+      const started = startBehaviorRevisionFlow(db, userId, {
+        employee,
+        site,
+        lineChannel: inboundChannelId,
+      });
+      writeDb(db);
+      await replyToEvent(started.message, {
+        withQuickReply: started.withQuickReply === true,
+        quickReplyType: started.quickReplyType || "attendance",
+        behaviorItemIndex: Number.isFinite(Number(started.itemIndex)) ? Number(started.itemIndex) : 1,
+      });
+      continue;
+    }
 
     const action = detectAction(text);
     if (!action) {
@@ -430,6 +487,23 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
 
     try {
       const snapshot = processLineAction({ employee, site, action, source: "LINE", lineUserId: userId });
+      if (action === "checkout") {
+        const flowDb = readDb();
+        const started = startBehaviorSubmissionFlow(flowDb, userId, {
+          employee,
+          site,
+          checkoutTime: snapshot?.lineSync?.time || "",
+          date: snapshot?.lineSync?.dateISO ? String(snapshot.lineSync.dateISO).slice(0, 10) : "",
+          lineChannel: inboundChannelId,
+        });
+        writeDb(flowDb);
+        await replyToEvent(started.message, {
+          withQuickReply: started.withQuickReply === true,
+          quickReplyType: started.quickReplyType || "attendance",
+          behaviorItemIndex: Number.isFinite(Number(started.itemIndex)) ? Number(started.itemIndex) : 1,
+        });
+        continue;
+      }
       const msg = `受け付けました: ${employee} / ${site} / ${actionLabel(action)} (${snapshot.lineSync?.time || "-"})`;
       await replyToEvent(msg, { withQuickReply: true });
     } catch (error) {
@@ -440,10 +514,22 @@ app.post("/line/webhook", express.raw({ type: "application/json" }), async (req,
   res.json({ ok: true });
 });
 
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "coreca-line-attendance", at: new Date().toISOString() });
+});
+
+app.get(MANUAL_PDF_URL_PATH, (_req, res) => {
+  if (!fs.existsSync(MANUAL_PDF_FILE)) {
+    return res.status(404).send("instruction pdf not found");
+  }
+  return res.sendFile(MANUAL_PDF_FILE, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Cache-Control": "no-store",
+    },
+  });
 });
 
 app.get("/api/auth/config", (_req, res) => {
@@ -567,6 +653,127 @@ app.get("/api/bootstrap", (_req, res) => {
   const db = readDb();
   res.json(buildClientSnapshot(db, { includeCorrectionRequests: true }));
 });
+
+app.get("/api/behavior/config", (req, res) => {
+  const db = readDb();
+  const settings = normalizeBehaviorSettings(db.behaviorSettings);
+  const reminder = normalizeBehaviorReminder(db.behaviorReminder);
+  const instruction = resolveManualInstructionInfo(db, req);
+  res.json({
+    ok: true,
+    enabled: BEHAVIOR_REPORT_ENABLED,
+    settings,
+    reminder,
+    instruction,
+  });
+});
+
+app.post("/api/behavior/config", (req, res) => {
+  const db = readDb();
+  const currentSettings = normalizeBehaviorSettings(db.behaviorSettings);
+  const currentReminder = normalizeBehaviorReminder(db.behaviorReminder);
+  const nextSettings = normalizeBehaviorSettings({
+    ...currentSettings,
+    ...(req.body?.settings || {}),
+  });
+  const nextReminder = normalizeBehaviorReminder({
+    ...currentReminder,
+    ...(req.body?.reminder || {}),
+  });
+  db.behaviorSettings = nextSettings;
+  db.behaviorReminder = nextReminder;
+  writeDb(db);
+  res.json({ ok: true, settings: nextSettings, reminder: nextReminder });
+});
+
+app.get("/api/behavior/reports", (req, res) => {
+  const db = readDb();
+  const purged = purgeExpiredBehaviorReports(db);
+  const dateFrom = normalizeYmd(req.query?.dateFrom) || getJstDateOffset(-7);
+  const dateTo = normalizeYmd(req.query?.dateTo) || getJstDateOffset(0);
+  const employee = String(req.query?.employee || "").trim();
+  const status = String(req.query?.status || "all").trim().toLowerCase();
+  const reports = filterBehaviorReports(db.behaviorReports, {
+    dateFrom,
+    dateTo,
+    employee,
+    status,
+  });
+  const missing = buildMissingBehaviorReportRows(db, dateFrom, dateTo, employee);
+  const summary = summarizeBehaviorReportStatus(reports);
+  if (purged) writeDb(db);
+  res.json({
+    ok: true,
+    reports,
+    missing,
+    summary,
+    filters: { dateFrom, dateTo, employee, status },
+  });
+});
+
+app.post("/api/behavior/reports/:id/review", async (req, res) => {
+  const id = String(req.params?.id || "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "id is required" });
+  const db = readDb();
+  const idx = (db.behaviorReports || []).findIndex((row) => String(row?.id || "") === id);
+  if (idx < 0) return res.status(404).json({ ok: false, error: "report not found" });
+  const report = db.behaviorReports[idx];
+  const reviewer = String(req.adminAuth?.sub || ADMIN_LOGIN_ID || "admin");
+  const decision = normalizeBehaviorReviewDecision(req.body?.decision);
+  const marks = normalizeBehaviorManagerMarks(req.body?.marks);
+  const managerComment = normalizeLongText(req.body?.managerComment || "");
+  const updated = applyBehaviorManagerReview(report, {
+    decision,
+    marks,
+    managerComment,
+    reviewer,
+    nowIso: new Date().toISOString(),
+  });
+  db.behaviorReports[idx] = updated;
+  writeDb(db);
+
+  if (updated.status === "needs_revision" && updated.lineUserId) {
+    const command = normalizeBehaviorSettings(db.behaviorSettings).revisionCommand;
+    const push = buildBehaviorRevisionPushMessage(updated, command);
+    await sendLinePush(updated.lineUserId, push.text, { channel: push.channel || "primary" });
+  }
+  res.json({ ok: true, report: updated });
+});
+
+app.post("/api/behavior/reminder/send-now", async (_req, res) => {
+  const result = await runBehaviorReminder({ force: true, reason: "manual_api" });
+  res.json({ ok: true, ...result });
+});
+
+app.get("/api/manual/instruction", (req, res) => {
+  const db = readDb();
+  const instruction = resolveManualInstructionInfo(db, req);
+  res.json({ ok: true, instruction });
+});
+
+app.post(
+  "/api/manual/instruction-pdf",
+  express.raw({ type: ["application/pdf", "application/octet-stream"], limit: "20mb" }),
+  (req, res) => {
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || !body.length) {
+      return res.status(400).json({ ok: false, error: "pdf body is required" });
+    }
+    ensureManualDataDirectory();
+    fs.writeFileSync(MANUAL_PDF_FILE, body);
+    const db = readDb();
+    db.manualInstruction = {
+      fileName: MANUAL_PDF_FILENAME,
+      sizeBytes: body.length,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: String(req.adminAuth?.sub || ADMIN_LOGIN_ID || "admin"),
+      contentType: "application/pdf",
+    };
+    writeDb(db);
+    const info = resolveManualInstructionInfo(db, req);
+    return res.json({ ok: true, instruction: info });
+  }
+);
 
 app.post("/api/settings/alcohol-limit", (req, res) => {
   const db = readDb();
@@ -1045,6 +1252,10 @@ setInterval(() => {
   runScheduledBackup().catch(() => {});
 }, 60 * 1000);
 
+setInterval(() => {
+  runBehaviorReminder({ force: false, reason: "scheduled" }).catch(() => {});
+}, 60 * 1000);
+
 function detectAction(text) {
   if (text.includes("出勤")) return "checkin";
   if (text.includes("退勤")) return "checkout";
@@ -1111,7 +1322,7 @@ function isDailyReportCommand(text) {
   return normalized.includes("日報") || normalized.includes("daily report");
 }
 
-function buildManualGuideMessage(manualUrl = "") {
+function buildManualGuideMessage(manualUrl = "", instructionUrl = "") {
   const lines = [
     "【Liive 勤怠マニュアル】",
     "社員向けの使い方ガイドです。",
@@ -1128,8 +1339,692 @@ function buildManualGuideMessage(manualUrl = "") {
   } else {
     lines.push("公開URLが未設定です。管理者に `MANUAL_PUBLIC_URL` の設定を依頼してください。");
   }
+  if (isHttpUrl(instructionUrl)) {
+    lines.push("", "最新版の指示書PDF");
+    lines.push(instructionUrl);
+  }
   lines.push("", "※日報機能は現在準備中です。");
   return lines.join("\n");
+}
+
+function createDefaultBehaviorSettings() {
+  return {
+    enabled: BEHAVIOR_REPORT_ENABLED,
+    labels: ["人への姿勢", "職場への姿勢", "責任・判断への姿勢"],
+    failReasonMaxLength: BEHAVIOR_FAIL_REASON_MAX,
+    revisionCommand: "姿勢報告修正",
+    correctionDeadline: "next_day_2359_jst",
+  };
+}
+
+function normalizeBehaviorSettings(input) {
+  const base = createDefaultBehaviorSettings();
+  const labelsRaw = Array.isArray(input?.labels) ? input.labels : base.labels;
+  const labels = labelsRaw
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  while (labels.length < 3) {
+    labels.push(base.labels[labels.length] || `項目${labels.length + 1}`);
+  }
+  const failReasonMaxLength = Math.min(
+    200,
+    Math.max(10, Number(input?.failReasonMaxLength || base.failReasonMaxLength))
+  );
+  const revisionCommand = String(input?.revisionCommand || base.revisionCommand).trim() || base.revisionCommand;
+  return {
+    enabled: parseBooleanValue(input?.enabled, base.enabled),
+    labels: labels.slice(0, 3),
+    failReasonMaxLength,
+    revisionCommand,
+    correctionDeadline: base.correctionDeadline,
+  };
+}
+
+function createDefaultBehaviorReminder() {
+  return {
+    enabled: false,
+    hourJst: BEHAVIOR_REMINDER_DEFAULT_HOUR_JST,
+    minuteJst: BEHAVIOR_REMINDER_DEFAULT_MINUTE_JST,
+    lastRunDateJst: "",
+  };
+}
+
+function normalizeBehaviorReminder(input) {
+  const base = createDefaultBehaviorReminder();
+  return {
+    enabled: parseBooleanValue(input?.enabled, base.enabled),
+    hourJst: Math.min(23, Math.max(0, Number(input?.hourJst ?? base.hourJst))),
+    minuteJst: Math.min(59, Math.max(0, Number(input?.minuteJst ?? base.minuteJst))),
+    lastRunDateJst: normalizeYmd(input?.lastRunDateJst) || "",
+  };
+}
+
+function parseBooleanValue(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(text)) return true;
+  if (["0", "false", "no", "off"].includes(text)) return false;
+  return fallback;
+}
+
+function normalizeLongText(value) {
+  return String(value || "").replace(/\r?\n/g, " ").trim();
+}
+
+function parseBehaviorMark(text) {
+  const raw = String(text || "").trim();
+  const normalized = raw
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replaceAll("◯", "○")
+    .replaceAll("〇", "○")
+    .replaceAll("×", "✖")
+    .replaceAll("x", "✖");
+  if (!normalized) return "";
+  if (normalized.includes("✖")) return "fail";
+  if (normalized.includes("○") || normalized === "o") return "pass";
+  return "";
+}
+
+function behaviorMarkLabel(mark) {
+  return mark === "fail" ? "✖" : "○";
+}
+
+function behaviorNeedsReason(mark) {
+  return mark === "fail";
+}
+
+function buildBehaviorDeadlineIso(attendanceDate) {
+  const date = normalizeYmd(attendanceDate) || toJstParts(new Date()).date;
+  const deadline = new Date(`${date}T23:59:59+09:00`);
+  deadline.setDate(deadline.getDate() + 1);
+  return deadline.toISOString();
+}
+
+function isBehaviorReportRevisionCommand(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  return (
+    normalized.includes("姿勢報告修正") ||
+    normalized.includes("チェック修正") ||
+    normalized.includes("報告修正") ||
+    normalized.includes("revise")
+  );
+}
+
+function startBehaviorSubmissionFlow(db, userId, options = {}) {
+  const settings = normalizeBehaviorSettings(db.behaviorSettings);
+  if (!settings.enabled) {
+    return {
+      message: "受け付けました。姿勢報告は現在オフです。",
+      withQuickReply: true,
+      quickReplyType: "attendance",
+      itemIndex: 1,
+    };
+  }
+  const attendanceDate = normalizeYmd(options.date) || toJstParts(new Date()).date;
+  const items = settings.labels.map((label, i) => ({
+    index: i + 1,
+    label,
+    mark: "",
+    reason: "",
+  }));
+  db.lineWorkflows = db.lineWorkflows || {};
+  db.lineWorkflows[userId] = {
+    type: "behavior_report",
+    mode: "new",
+    stage: "need_mark",
+    cursor: 0,
+    employee: String(options.employee || "").trim(),
+    site: String(options.site || "").trim(),
+    lineUserId: userId,
+    lineChannel: normalizeLineChannel(options.lineChannel || "primary"),
+    attendanceDate,
+    checkoutTime: String(options.checkoutTime || "").trim(),
+    items,
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  return buildBehaviorMarkPrompt(db.lineWorkflows[userId]);
+}
+
+function startBehaviorRevisionFlow(db, userId, options = {}) {
+  const settings = normalizeBehaviorSettings(db.behaviorSettings);
+  if (!settings.enabled) {
+    return {
+      message: "姿勢報告機能は現在オフです。",
+      withQuickReply: true,
+      quickReplyType: "attendance",
+      itemIndex: 1,
+    };
+  }
+  const target = findLatestReportForRevision(db.behaviorReports, userId, options.employee);
+  if (!target) {
+    return {
+      message: "修正対象の姿勢報告はありません。必要な場合は管理者に確認してください。",
+      withQuickReply: true,
+      quickReplyType: "attendance",
+      itemIndex: 1,
+    };
+  }
+  const items = settings.labels.map((label, i) => ({
+    index: i + 1,
+    label,
+    mark: "",
+    reason: "",
+  }));
+  db.lineWorkflows = db.lineWorkflows || {};
+  db.lineWorkflows[userId] = {
+    type: "behavior_report",
+    mode: "revision",
+    reportId: target.id,
+    stage: "need_mark",
+    cursor: 0,
+    employee: target.employee,
+    site: target.site,
+    lineUserId: userId,
+    lineChannel: normalizeLineChannel(target.lineChannel || options.lineChannel || "primary"),
+    attendanceDate: target.attendanceDate,
+    checkoutTime: target.checkoutTime || "",
+    items,
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const prompt = buildBehaviorMarkPrompt(db.lineWorkflows[userId]);
+  return {
+    ...prompt,
+    message:
+      `管理者から修正依頼があります。${target.attendanceDate}分を再提出してください。\n` +
+      `期限: ${formatIsoToJst(target.deadlineAt) || "翌日まで"}\n\n` +
+      prompt.message,
+  };
+}
+
+function buildBehaviorMarkPrompt(flow) {
+  const index = Number(flow?.cursor || 0);
+  const item = flow?.items?.[index];
+  if (!item) {
+    return {
+      message: "姿勢報告を受け付けました。",
+      withQuickReply: true,
+      quickReplyType: "attendance",
+      itemIndex: 1,
+    };
+  }
+  return {
+    message: `【姿勢報告 ${index + 1}/${flow.items.length}】\n${item.index}. ${item.label}\n○ か ✖ を選択してください。`,
+    withQuickReply: true,
+    quickReplyType: "behavior_mark",
+    itemIndex: item.index,
+  };
+}
+
+function buildBehaviorReasonPrompt(flow) {
+  const index = Number(flow?.cursor || 0);
+  const item = flow?.items?.[index];
+  const maxLength = normalizeBehaviorSettings(readDb().behaviorSettings).failReasonMaxLength;
+  return {
+    message: `【姿勢報告 ${index + 1}/${flow.items.length}】\n${item?.index || index + 1}. ${item?.label || "項目"}\n✖ の理由を ${maxLength}文字以内で入力してください。`,
+    withQuickReply: false,
+    quickReplyType: "attendance",
+    itemIndex: item?.index || index + 1,
+  };
+}
+
+function advanceBehaviorReportFlow(db, userId, text, options = {}) {
+  const flow = db.lineWorkflows?.[userId];
+  if (!flow || flow.type !== "behavior_report") {
+    return {
+      message: "姿勢報告の受付状態が見つかりません。退勤後に再度入力してください。",
+      withQuickReply: true,
+      quickReplyType: "attendance",
+      itemIndex: 1,
+    };
+  }
+  if (String(text || "").trim() === "キャンセル") {
+    delete db.lineWorkflows[userId];
+    return {
+      message: "姿勢報告をキャンセルしました。必要な場合は「姿勢報告修正」と送信してください。",
+      withQuickReply: true,
+      quickReplyType: "attendance",
+      itemIndex: 1,
+    };
+  }
+
+  const settings = normalizeBehaviorSettings(db.behaviorSettings);
+  const index = Number(flow.cursor || 0);
+  const item = flow.items?.[index];
+  if (!item) {
+    delete db.lineWorkflows[userId];
+    return {
+      message: "姿勢報告を受け付けました。",
+      withQuickReply: true,
+      quickReplyType: "attendance",
+      itemIndex: 1,
+    };
+  }
+
+  if (flow.stage === "need_mark") {
+    const mark = parseBehaviorMark(text);
+    if (!mark) return buildBehaviorMarkPrompt(flow);
+    item.mark = mark;
+    if (behaviorNeedsReason(mark)) {
+      flow.stage = "need_reason";
+      flow.updatedAt = new Date().toISOString();
+      db.lineWorkflows[userId] = flow;
+      return buildBehaviorReasonPrompt(flow);
+    }
+    item.reason = "";
+    flow.cursor = index + 1;
+    flow.stage = "need_mark";
+    flow.updatedAt = new Date().toISOString();
+    if (flow.cursor >= flow.items.length) {
+      return finalizeBehaviorReportFlow(db, userId, flow, options);
+    }
+    db.lineWorkflows[userId] = flow;
+    return buildBehaviorMarkPrompt(flow);
+  }
+
+  if (flow.stage === "need_reason") {
+    const reason = normalizeLongText(text || "");
+    if (!reason || reason.length > settings.failReasonMaxLength) {
+      return {
+        message: `✖ の理由は ${settings.failReasonMaxLength}文字以内で入力してください。`,
+        withQuickReply: false,
+        quickReplyType: "attendance",
+        itemIndex: item.index,
+      };
+    }
+    item.reason = reason;
+    flow.cursor = index + 1;
+    flow.stage = "need_mark";
+    flow.updatedAt = new Date().toISOString();
+    if (flow.cursor >= flow.items.length) {
+      return finalizeBehaviorReportFlow(db, userId, flow, options);
+    }
+    db.lineWorkflows[userId] = flow;
+    return buildBehaviorMarkPrompt(flow);
+  }
+
+  flow.stage = "need_mark";
+  db.lineWorkflows[userId] = flow;
+  return buildBehaviorMarkPrompt(flow);
+}
+
+function finalizeBehaviorReportFlow(db, userId, flow, options = {}) {
+  const nowIso = new Date().toISOString();
+  const records = Array.isArray(db.behaviorReports) ? db.behaviorReports : [];
+  const submissionItems = (flow.items || []).map((item) => ({
+    index: Number(item.index || 0),
+    label: String(item.label || ""),
+    selfMark: item.mark === "fail" ? "fail" : "pass",
+    selfReason: String(item.reason || ""),
+  }));
+  const summary = submissionItems.map((item) => `${item.index}${behaviorMarkLabel(item.selfMark)}`).join(" ");
+
+  if (flow.mode === "revision" && flow.reportId) {
+    const idx = records.findIndex((row) => String(row?.id || "") === String(flow.reportId));
+    if (idx >= 0) {
+      const prev = records[idx];
+      const history = Array.isArray(prev.history) ? prev.history : [];
+      records[idx] = {
+        ...prev,
+        items: submissionItems,
+        status: "resubmitted",
+        resubmittedAt: nowIso,
+        revisionCount: Number(prev.revisionCount || 0) + 1,
+        updatedAt: nowIso,
+        history: history.concat({
+          at: nowIso,
+          actor: flow.employee || options.employee || "employee",
+          action: "resubmitted",
+          note: summary,
+        }),
+      };
+      db.behaviorReports = records.slice(-50000);
+      delete db.lineWorkflows[userId];
+      return {
+        message: `姿勢報告を再提出しました。(${summary})\n管理者の確認をお待ちください。`,
+        withQuickReply: true,
+        quickReplyType: "attendance",
+        itemIndex: 1,
+      };
+    }
+  }
+
+  const report = {
+    id: `beh-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    attendanceDate: normalizeYmd(flow.attendanceDate) || toJstParts(new Date()).date,
+    checkoutTime: String(flow.checkoutTime || options.checkoutTime || ""),
+    employee: String(flow.employee || options.employee || "").trim(),
+    site: String(flow.site || options.site || "").trim(),
+    lineUserId: String(flow.lineUserId || options.lineUserId || userId || ""),
+    lineChannel: normalizeLineChannel(flow.lineChannel || options.lineChannel || "primary"),
+    submittedAt: nowIso,
+    deadlineAt: buildBehaviorDeadlineIso(flow.attendanceDate),
+    items: submissionItems,
+    status: "submitted",
+    revisionCount: 0,
+    managerReview: null,
+    history: [
+      {
+        at: nowIso,
+        actor: String(flow.employee || options.employee || "employee"),
+        action: "submitted",
+        note: summary,
+      },
+    ],
+    updatedAt: nowIso,
+  };
+  db.behaviorReports = records.concat(report).slice(-50000);
+  delete db.lineWorkflows[userId];
+  return {
+    message: `姿勢報告を受け付けました。(${summary})\nお疲れ様でした。`,
+    withQuickReply: true,
+    quickReplyType: "attendance",
+    itemIndex: 1,
+  };
+}
+
+function findLatestReportForRevision(rows, lineUserId, employee) {
+  const now = Date.now();
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => {
+      if (row.status !== "needs_revision") return false;
+      const byUser = lineUserId && row.lineUserId === lineUserId;
+      const byEmployee = employee && row.employee === employee;
+      if (!byUser && !byEmployee) return false;
+      const deadline = new Date(String(row.deadlineAt || 0)).getTime();
+      return Number.isFinite(deadline) && deadline >= now;
+    })
+    .sort((a, b) => String(b.updatedAt || b.submittedAt || "").localeCompare(String(a.updatedAt || a.submittedAt || "")))[0];
+}
+
+function normalizeBehaviorManagerMarks(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((row) => ({
+      index: Math.max(1, Number(row?.index || 0)),
+      mark:
+        String(row?.mark || "").trim().toLowerCase() === "fail"
+          ? "fail"
+          : String(row?.mark || "").trim().toLowerCase() === "pass"
+            ? "pass"
+            : "keep",
+      comment: normalizeLongText(row?.comment || ""),
+    }))
+    .filter((row) => Number.isFinite(row.index) && row.index > 0);
+}
+
+function normalizeBehaviorReviewDecision(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (text === "close") return "close";
+  return "review";
+}
+
+function applyBehaviorManagerReview(report, payload) {
+  const nowIso = String(payload.nowIso || new Date().toISOString());
+  const marks = Array.isArray(payload.marks) ? payload.marks : [];
+  const markMap = new Map(marks.map((row) => [Number(row.index), row]));
+  const reviewedItems = (report.items || []).map((item) => {
+    const input = markMap.get(Number(item.index || 0));
+    const managerMark = input?.mark === "pass" || input?.mark === "fail" ? input.mark : item.selfMark || "pass";
+    return {
+      index: Number(item.index || 0),
+      label: String(item.label || ""),
+      selfMark: item.selfMark === "fail" ? "fail" : "pass",
+      selfReason: String(item.selfReason || ""),
+      managerMark,
+      managerComment: String(input?.comment || ""),
+    };
+  });
+  const mismatchNeedsRevision = reviewedItems.some((item) => item.selfMark === "pass" && item.managerMark === "fail");
+  const nextStatus =
+    payload.decision === "close" ? "closed" : mismatchNeedsRevision ? "needs_revision" : "manager_checked";
+  const history = Array.isArray(report.history) ? report.history : [];
+  return {
+    ...report,
+    status: nextStatus,
+    managerReview: {
+      reviewedAt: nowIso,
+      reviewer: String(payload.reviewer || ADMIN_LOGIN_ID),
+      decision: payload.decision,
+      managerComment: String(payload.managerComment || ""),
+      items: reviewedItems,
+    },
+    updatedAt: nowIso,
+    history: history.concat({
+      at: nowIso,
+      actor: String(payload.reviewer || ADMIN_LOGIN_ID),
+      action: nextStatus,
+      note: mismatchNeedsRevision ? "manager flagged revision" : payload.decision === "close" ? "closed" : "checked",
+    }),
+  };
+}
+
+function buildBehaviorRevisionPushMessage(report, revisionCommand = "") {
+  const command = String(revisionCommand || normalizeBehaviorSettings({}).revisionCommand).trim();
+  return {
+    channel: normalizeLineChannel(report?.lineChannel || "primary"),
+    text:
+      `【Liive 姿勢報告】\n` +
+      `${report.employee || "社員"}さんの ${report.attendanceDate || ""} 分に修正依頼があります。\n` +
+      `期限: ${formatIsoToJst(report.deadlineAt) || "翌日23:59"}\n` +
+      `トークに「${command}」と送信して再提出してください。`,
+  };
+}
+
+function formatIsoToJst(isoText) {
+  if (!isoText) return "";
+  const date = new Date(isoText);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = toJstParts(date);
+  return `${parts.date} ${parts.time}`;
+}
+
+function filterBehaviorReports(rows, filters) {
+  const from = normalizeYmd(filters.dateFrom) || "0000-01-01";
+  const to = normalizeYmd(filters.dateTo) || "9999-12-31";
+  const employee = String(filters.employee || "").trim();
+  const status = String(filters.status || "all").trim().toLowerCase();
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => {
+      const date = normalizeYmd(row.attendanceDate);
+      if (!date || date < from || date > to) return false;
+      if (employee && String(row.employee || "") !== employee) return false;
+      if (status !== "all" && String(row.status || "").toLowerCase() !== status) return false;
+      return true;
+    })
+    .sort((a, b) => String(b.updatedAt || b.submittedAt || "").localeCompare(String(a.updatedAt || a.submittedAt || "")));
+}
+
+function buildMissingBehaviorReportRows(db, dateFrom, dateTo, employee = "") {
+  const from = normalizeYmd(dateFrom) || "0000-01-01";
+  const to = normalizeYmd(dateTo) || "9999-12-31";
+  const wantedEmployee = String(employee || "").trim();
+  const reportedSet = new Set(
+    (db.behaviorReports || []).map((row) => `${normalizeYmd(row.attendanceDate)}|${String(row.employee || "")}`)
+  );
+  const checkoutRows = (db.timecards || []).filter((row) => {
+    const date = normalizeYmd(row.date);
+    if (!date || date < from || date > to) return false;
+    if (wantedEmployee && String(row.employee || "") !== wantedEmployee) return false;
+    return Boolean(row.checkOut);
+  });
+  const seen = new Set();
+  const missing = [];
+  checkoutRows.forEach((row) => {
+    const key = `${normalizeYmd(row.date)}|${String(row.employee || "")}`;
+    if (seen.has(key) || reportedSet.has(key)) return;
+    seen.add(key);
+    missing.push({
+      id: `missing-${row.date}-${row.employee}`,
+      attendanceDate: row.date,
+      employee: row.employee,
+      site: row.site || "",
+      status: "missing",
+      note: "退勤済み・姿勢報告未提出",
+    });
+  });
+  return missing.sort((a, b) => `${b.attendanceDate}${b.employee}`.localeCompare(`${a.attendanceDate}${a.employee}`));
+}
+
+function summarizeBehaviorReportStatus(reports) {
+  const summary = {
+    total: 0,
+    submitted: 0,
+    needs_revision: 0,
+    resubmitted: 0,
+    manager_checked: 0,
+    closed: 0,
+  };
+  (reports || []).forEach((row) => {
+    summary.total += 1;
+    const key = String(row.status || "").toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(summary, key)) summary[key] += 1;
+  });
+  return summary;
+}
+
+function resolveManualInstructionInfo(db, req) {
+  const manual = db?.manualInstruction || {};
+  const exists = fs.existsSync(MANUAL_PDF_FILE);
+  const origin = resolveRequestOrigin(req);
+  const publicUrl = exists && origin ? `${origin}${MANUAL_PDF_URL_PATH}` : "";
+  return {
+    exists,
+    publicUrl,
+    fileName: manual.fileName || (exists ? MANUAL_PDF_FILENAME : ""),
+    sizeBytes: Number(manual.sizeBytes || (exists ? fs.statSync(MANUAL_PDF_FILE).size : 0)),
+    uploadedAt: manual.uploadedAt || null,
+    uploadedBy: manual.uploadedBy || "",
+  };
+}
+
+function ensureManualDataDirectory() {
+  if (!fs.existsSync(MANUAL_DATA_DIR)) fs.mkdirSync(MANUAL_DATA_DIR, { recursive: true });
+}
+
+function purgeExpiredBehaviorReports(db) {
+  const reports = Array.isArray(db.behaviorReports) ? db.behaviorReports : [];
+  const now = Date.now();
+  const keepMs = BEHAVIOR_DATA_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const filtered = reports.filter((row) => {
+    const anchor = new Date(row.updatedAt || row.submittedAt || `${row.attendanceDate || ""}T00:00:00+09:00`).getTime();
+    if (!Number.isFinite(anchor)) return true;
+    return now - anchor <= keepMs;
+  });
+  if (filtered.length !== reports.length) {
+    db.behaviorReports = filtered;
+    return true;
+  }
+  return false;
+}
+
+function findLineUserProfileByEmployee(db, employee) {
+  const map = db.userMap || {};
+  const target = String(employee || "").trim();
+  if (!target) return null;
+  for (const userId of Object.keys(map)) {
+    const row = map[userId] || {};
+    if (row.employeeName === target || row.employee === target) {
+      return {
+        userId,
+        lineChannel: normalizeLineChannel(row.lineChannel || "primary"),
+        profile: row,
+      };
+    }
+  }
+  return null;
+}
+
+function collectBehaviorReminderTargets(db, date) {
+  const day = normalizeYmd(date);
+  if (!day) return [];
+  const reported = new Set(
+    (db.behaviorReports || [])
+      .filter((row) => normalizeYmd(row.attendanceDate) === day)
+      .map((row) => `${row.attendanceDate}|${row.employee}`)
+  );
+  const checkoutMap = new Map();
+  (db.timecards || []).forEach((row) => {
+    const rowDate = normalizeYmd(row.date);
+    if (rowDate !== day) return;
+    if (!row.checkOut) return;
+    const key = `${rowDate}|${row.employee}`;
+    if (checkoutMap.has(key)) return;
+    checkoutMap.set(key, row);
+  });
+  const targets = [];
+  checkoutMap.forEach((row) => {
+    const key = `${row.date}|${row.employee}`;
+    if (reported.has(key)) return;
+    const mapped = findLineUserProfileByEmployee(db, row.employee);
+    if (!mapped?.userId) return;
+    targets.push({
+      date: row.date,
+      employee: row.employee,
+      site: row.site || "",
+      userId: mapped.userId,
+      channel: mapped.lineChannel || "primary",
+    });
+  });
+  return targets;
+}
+
+async function runBehaviorReminder(options = {}) {
+  const force = options.force === true;
+  const reason = String(options.reason || (force ? "manual" : "scheduled"));
+  const db = readDb();
+  const reminder = normalizeBehaviorReminder(db.behaviorReminder);
+  const now = new Date();
+  const nowJst = toJstParts(now);
+
+  if (!force && !reminder.enabled) {
+    return { ok: true, skipped: true, reason: "disabled", sentCount: 0, targets: [] };
+  }
+  if (!force) {
+    const hour = Number(nowJst.time.slice(0, 2));
+    const minute = Number(nowJst.time.slice(3, 5));
+    if (hour !== reminder.hourJst || minute !== reminder.minuteJst) {
+      return { ok: true, skipped: true, reason: "time_not_match", sentCount: 0, targets: [] };
+    }
+    if (reminder.lastRunDateJst === nowJst.date) {
+      return { ok: true, skipped: true, reason: "already_ran", sentCount: 0, targets: [] };
+    }
+  }
+
+  const targets = collectBehaviorReminderTargets(db, nowJst.date);
+  let sentCount = 0;
+  for (const target of targets) {
+    const text =
+      `【Liive 姿勢報告リマインド】\n` +
+      `${target.employee}さん ${target.date} の姿勢報告（①〜③）が未提出です。\n` +
+      `退勤後の報告をお願いします。`;
+    const ok = await sendLinePush(target.userId, text, { channel: target.channel || "primary" });
+    if (ok) sentCount += 1;
+  }
+
+  db.behaviorReminder = {
+    ...reminder,
+    lastRunDateJst: nowJst.date,
+    lastReason: reason,
+    lastSentCount: sentCount,
+    lastTargets: targets.map((x) => ({ employee: x.employee, date: x.date, userId: x.userId })),
+    lastRunAt: now.toISOString(),
+  };
+  const changed = purgeExpiredBehaviorReports(db);
+  writeDb(db);
+  return {
+    ok: true,
+    skipped: false,
+    reason,
+    sentCount,
+    targetCount: targets.length,
+    retentionPurged: changed,
+    targets,
+  };
 }
 
 function extractPlaceNameFromMapsUrl(urlText) {
@@ -1642,6 +2537,7 @@ function processLineAction({ employee, site, action, source, lineUserId = "", gp
 
 function buildClientSnapshot(db, options = {}) {
   const includeCorrectionRequests = options.includeCorrectionRequests === true;
+  const includeBehaviorReports = options.includeBehaviorReports === true;
   const snapshot = {
     ok: true,
     lineSync: db.lineSync,
@@ -1649,9 +2545,14 @@ function buildClientSnapshot(db, options = {}) {
     timecards: (db.timecards || []).slice(-SNAPSHOT_TIMECARD_LIMIT),
     attendancePolicy: normalizeAttendancePolicy(db.attendancePolicy),
     alcoholLimit: normalizeAlcoholLimit(db.alcoholLimit),
+    behaviorSettings: normalizeBehaviorSettings(db.behaviorSettings),
+    behaviorReminder: normalizeBehaviorReminder(db.behaviorReminder),
   };
   if (includeCorrectionRequests) {
     snapshot.lineCorrectionRequests = (db.lineCorrectionRequests || []).slice(-SNAPSHOT_CORRECTION_LIMIT);
+  }
+  if (includeBehaviorReports) {
+    snapshot.behaviorReports = (db.behaviorReports || []).slice(-1000);
   }
   return snapshot;
 }
@@ -1869,6 +2770,33 @@ function getManualQuickReplyItems(manualUrl = "") {
   ];
 }
 
+function getBehaviorMarkQuickReplyItems(itemIndex = 1, manualUrl = "") {
+  const idx = Math.max(1, Math.min(9, Number(itemIndex || 1)));
+  return [
+    {
+      type: "action",
+      action: { type: "message", label: `${idx}○`, text: `${idx}○` },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: `${idx}✖`, text: `${idx}✖` },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "○", text: "○" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "✖", text: "✖" },
+    },
+    {
+      type: "action",
+      action: { type: "message", label: "キャンセル", text: "キャンセル" },
+    },
+    buildManualQuickReplyItem(manualUrl),
+  ];
+}
+
 async function sendLineReply(replyToken, text, options = {}) {
   const channelConfig = getLineChannelConfig(options.channel);
   const accessToken = String(channelConfig?.accessToken || "");
@@ -1884,6 +2812,7 @@ async function sendLineReply(replyToken, text, options = {}) {
     if (type === "photo_face") items = getPhotoQuickReplyItems("face", manualUrl);
     if (type === "location") items = getLocationQuickReplyItems(manualUrl);
     if (type === "manual") items = getManualQuickReplyItems(manualUrl);
+    if (type === "behavior_mark") items = getBehaviorMarkQuickReplyItems(options.behaviorItemIndex || 1, manualUrl);
     message.quickReply = {
       items,
     };
@@ -3227,6 +4156,16 @@ function createEmptyDb() {
     employeeRules: {},
     attendancePolicy: { ...DEFAULT_ATTENDANCE_POLICY },
     alcoholLimit: normalizeAlcoholLimit(DEFAULT_ALCOHOL_LIMIT),
+    behaviorSettings: createDefaultBehaviorSettings(),
+    behaviorReports: [],
+    behaviorReminder: createDefaultBehaviorReminder(),
+    manualInstruction: {
+      fileName: "",
+      sizeBytes: 0,
+      uploadedAt: null,
+      uploadedBy: "",
+      contentType: "application/pdf",
+    },
   };
 }
 
@@ -3250,6 +4189,16 @@ function hydrateDbShape(input) {
   out.employeeRules = parsed.employeeRules || {};
   out.attendancePolicy = normalizeAttendancePolicy(parsed.attendancePolicy);
   out.alcoholLimit = normalizeAlcoholLimit(parsed.alcoholLimit);
+  out.behaviorSettings = normalizeBehaviorSettings(parsed.behaviorSettings);
+  out.behaviorReports = Array.isArray(parsed.behaviorReports) ? parsed.behaviorReports.slice(-50000) : [];
+  out.behaviorReminder = normalizeBehaviorReminder(parsed.behaviorReminder);
+  out.manualInstruction = {
+    fileName: String(parsed?.manualInstruction?.fileName || ""),
+    sizeBytes: Number(parsed?.manualInstruction?.sizeBytes || 0),
+    uploadedAt: parsed?.manualInstruction?.uploadedAt || null,
+    uploadedBy: String(parsed?.manualInstruction?.uploadedBy || ""),
+    contentType: String(parsed?.manualInstruction?.contentType || "application/pdf"),
+  };
   out.timecards = out.timecards.map((row) => ({
     ...row,
     sourceKey: row.sourceKey || buildTimecardSourceKey(row),
