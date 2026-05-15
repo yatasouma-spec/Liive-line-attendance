@@ -67,6 +67,8 @@ const AWS_TEXTRACT_ENABLED = parseBooleanEnv(process.env.AWS_TEXTRACT_ENABLED, f
 const ADMIN_AUTH_ENABLED = parseBooleanEnv(process.env.ADMIN_AUTH_ENABLED, false);
 const ADMIN_LOGIN_ID = String(process.env.ADMIN_LOGIN_ID || "admin").trim() || "admin";
 const ADMIN_LOGIN_PASSWORD = String(process.env.ADMIN_LOGIN_PASSWORD || "").trim();
+const ADMIN_DEFAULT_ROLE = normalizeAdminRole(process.env.ADMIN_DEFAULT_ROLE || process.env.ADMIN_ROLE || "owner", "owner");
+const ADMIN_USERS_JSON = String(process.env.ADMIN_USERS_JSON || "").trim();
 const ADMIN_SESSION_SECRET_RAW = String(process.env.ADMIN_SESSION_SECRET || "").trim();
 const ADMIN_SESSION_SECRET =
   String(ADMIN_SESSION_SECRET_RAW || process.env.LINE_CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET_2 || "liive-admin-session")
@@ -76,6 +78,14 @@ const ADMIN_LOGIN_MAX_ATTEMPTS = Math.min(20, Math.max(1, Number(process.env.ADM
 const ADMIN_LOGIN_WINDOW_MINUTES = Math.min(180, Math.max(1, Number(process.env.ADMIN_LOGIN_WINDOW_MINUTES || 15)));
 const ADMIN_LOGIN_LOCK_MINUTES = Math.min(1440, Math.max(1, Number(process.env.ADMIN_LOGIN_LOCK_MINUTES || 30)));
 const ADMIN_AUTH_EXEMPT_PATHS = new Set(["/health", "/auth/config", "/auth/login"]);
+const ADMIN_USERS_CONFIG = parseAdminUsersConfig({
+  rawJson: ADMIN_USERS_JSON,
+  fallbackId: ADMIN_LOGIN_ID,
+  fallbackPassword: ADMIN_LOGIN_PASSWORD,
+  fallbackRole: ADMIN_DEFAULT_ROLE,
+});
+const ADMIN_USERS = ADMIN_USERS_CONFIG.users;
+const ADMIN_USERS_CONFIG_ERROR = ADMIN_USERS_CONFIG.error;
 const BACKUP_ENABLED = parseBooleanEnv(process.env.BACKUP_ENABLED, false);
 const BACKUP_HOUR_JST = Math.min(23, Math.max(0, Number(process.env.BACKUP_HOUR_JST || 3)));
 const BACKUP_MINUTE_JST = Math.min(59, Math.max(0, Number(process.env.BACKUP_MINUTE_JST || 15)));
@@ -561,6 +571,7 @@ app.post("/api/auth/login", (req, res) => {
       enabled: false,
       token: "",
       adminId: "",
+      adminRole: "",
       expiresAt: null,
     });
   }
@@ -577,18 +588,17 @@ app.post("/api/auth/login", (req, res) => {
         lockedUntil: throttle.lockedUntilIso,
       });
   }
-  if (!ADMIN_LOGIN_PASSWORD) {
+  if (!ADMIN_USERS.length) {
     return res.status(500).json({
       ok: false,
-      error: "ADMIN_LOGIN_PASSWORD is not configured",
+      error: "ADMIN credentials are not configured",
       code: "AUTH_CONFIG_MISSING",
     });
   }
   const loginId = String(req.body?.loginId || "").trim();
   const password = String(req.body?.password || "").trim();
-  const idOk = secureTextMatch(loginId, ADMIN_LOGIN_ID);
-  const passwordOk = secureTextMatch(password, ADMIN_LOGIN_PASSWORD);
-  if (!idOk || !passwordOk) {
+  const matchedUser = findAdminUserByCredentials(loginId, password);
+  if (!matchedUser) {
     const failed = registerAdminLoginFailure(req);
     if (failed.locked) {
       return res
@@ -613,7 +623,8 @@ app.post("/api/auth/login", (req, res) => {
   const nowSec = Math.floor(Date.now() / 1000);
   const expSec = nowSec + Math.round(ADMIN_SESSION_TTL_HOURS * 60 * 60);
   const token = createAdminSessionToken({
-    sub: ADMIN_LOGIN_ID,
+    sub: matchedUser.id,
+    role: matchedUser.role,
     tenant: APP_TENANT_ID,
     iat: nowSec,
     exp: expSec,
@@ -622,7 +633,8 @@ app.post("/api/auth/login", (req, res) => {
     ok: true,
     enabled: true,
     token,
-    adminId: ADMIN_LOGIN_ID,
+    adminId: matchedUser.id,
+    adminRole: matchedUser.role,
     expiresAt: new Date(expSec * 1000).toISOString(),
   });
 });
@@ -643,7 +655,8 @@ app.get("/api/auth/me", (req, res) => {
     ok: true,
     enabled: true,
     loggedIn: true,
-    adminId: String(auth.payload?.sub || ADMIN_LOGIN_ID),
+    adminId: String(auth.payload?.sub || getAdminLoginIdHint()),
+    adminRole: normalizeAdminRole(auth.payload?.role || findAdminRoleById(auth.payload?.sub), ADMIN_DEFAULT_ROLE),
     expiresAt:
       Number.isFinite(Number(auth.payload?.exp)) && Number(auth.payload.exp) > 0
         ? new Date(Number(auth.payload.exp) * 1000).toISOString()
@@ -662,7 +675,10 @@ app.use("/api", (req, res, next) => {
       code: "AUTH_REQUIRED",
     });
   }
-  req.adminAuth = auth.payload || null;
+  req.adminAuth = {
+    ...(auth.payload || {}),
+    role: normalizeAdminRole(auth.payload?.role || findAdminRoleById(auth.payload?.sub), ADMIN_DEFAULT_ROLE),
+  };
   return next();
 });
 
@@ -679,7 +695,7 @@ app.get("/api/system/backup-status", (_req, res) => {
   res.json(buildBackupStatus());
 });
 
-app.post("/api/system/backup-now", async (_req, res) => {
+app.post("/api/system/backup-now", requireAdminRoles(["owner"]), async (_req, res) => {
   const result = await runDailyBackup({ reason: "manual_api" });
   if (!result.ok) {
     return res.status(500).json({
@@ -714,7 +730,7 @@ app.get("/api/behavior/config", (req, res) => {
   });
 });
 
-app.post("/api/behavior/config", (req, res) => {
+app.post("/api/behavior/config", requireAdminRoles(["owner", "manager"]), (req, res) => {
   const db = readDb();
   const currentSettings = normalizeBehaviorSettings(db.behaviorSettings);
   const currentReminder = normalizeBehaviorReminder(db.behaviorReminder);
@@ -757,14 +773,14 @@ app.get("/api/behavior/reports", (req, res) => {
   });
 });
 
-app.post("/api/behavior/reports/:id/review", async (req, res) => {
+app.post("/api/behavior/reports/:id/review", requireAdminRoles(["owner", "manager"]), async (req, res) => {
   const id = String(req.params?.id || "").trim();
   if (!id) return res.status(400).json({ ok: false, error: "id is required" });
   const db = readDb();
   const idx = (db.behaviorReports || []).findIndex((row) => String(row?.id || "") === id);
   if (idx < 0) return res.status(404).json({ ok: false, error: "report not found" });
   const report = db.behaviorReports[idx];
-  const reviewer = String(req.adminAuth?.sub || ADMIN_LOGIN_ID || "admin");
+  const reviewer = String(req.adminAuth?.sub || getAdminLoginIdHint() || "admin");
   const decision = normalizeBehaviorReviewDecision(req.body?.decision);
   const marks = normalizeBehaviorManagerMarks(req.body?.marks);
   const managerComment = normalizeLongText(req.body?.managerComment || "");
@@ -786,7 +802,7 @@ app.post("/api/behavior/reports/:id/review", async (req, res) => {
   res.json({ ok: true, report: updated });
 });
 
-app.post("/api/behavior/reminder/send-now", async (_req, res) => {
+app.post("/api/behavior/reminder/send-now", requireAdminRoles(["owner", "manager"]), async (_req, res) => {
   const result = await runBehaviorReminder({ force: true, reason: "manual_api" });
   res.json({ ok: true, ...result });
 });
@@ -799,6 +815,7 @@ app.get("/api/manual/instruction", (req, res) => {
 
 app.post(
   "/api/manual/instruction-pdf",
+  requireAdminRoles(["owner"]),
   express.raw({ type: ["application/pdf", "application/octet-stream"], limit: "20mb" }),
   async (req, res) => {
     const body = req.body;
@@ -815,7 +832,7 @@ app.post(
       fileName: MANUAL_PDF_FILENAME,
       sizeBytes: body.length,
       uploadedAt: nowIso,
-      uploadedBy: String(req.adminAuth?.sub || ADMIN_LOGIN_ID || "admin"),
+      uploadedBy: String(req.adminAuth?.sub || getAdminLoginIdHint() || "admin"),
       contentType: "application/pdf",
       storageBucket: storageResult.bucket || MANUAL_SUPABASE_BUCKET || "",
       storagePath: storageResult.path || fallbackStoragePath,
@@ -828,14 +845,14 @@ app.post(
   }
 );
 
-app.post("/api/settings/alcohol-limit", (req, res) => {
+app.post("/api/settings/alcohol-limit", requireAdminRoles(["owner", "manager"]), (req, res) => {
   const db = readDb();
   db.alcoholLimit = normalizeAlcoholLimit(req.body?.alcoholLimit);
   writeDb(db);
   res.json({ ok: true, alcoholLimit: db.alcoholLimit });
 });
 
-app.post("/api/employees/sync", (req, res) => {
+app.post("/api/employees/sync", requireAdminRoles(["owner", "manager"]), (req, res) => {
   const employees = Array.isArray(req.body?.employees) ? req.body.employees : [];
   const attendancePolicy = normalizeAttendancePolicy(req.body?.attendancePolicy);
   const db = readDb();
@@ -1116,7 +1133,7 @@ app.post("/api/line/users/rename", (req, res) => {
   res.json({ ok: true, changed });
 });
 
-app.post("/api/shift-plans/sync", (req, res) => {
+app.post("/api/shift-plans/sync", requireAdminRoles(["owner", "manager"]), (req, res) => {
   const plans = Array.isArray(req.body?.plans) ? req.body.plans : [];
   const normalized = plans
     .map((p) => ({
@@ -1841,7 +1858,7 @@ function applyBehaviorManagerReview(report, payload) {
     status: nextStatus,
     managerReview: {
       reviewedAt: nowIso,
-      reviewer: String(payload.reviewer || ADMIN_LOGIN_ID),
+      reviewer: String(payload.reviewer || getAdminLoginIdHint()),
       decision: payload.decision,
       managerComment: String(payload.managerComment || ""),
       items: reviewedItems,
@@ -1849,7 +1866,7 @@ function applyBehaviorManagerReview(report, payload) {
     updatedAt: nowIso,
     history: history.concat({
       at: nowIso,
-      actor: String(payload.reviewer || ADMIN_LOGIN_ID),
+      actor: String(payload.reviewer || getAdminLoginIdHint()),
       action: nextStatus,
       note: mismatchNeedsRevision ? "manager flagged revision" : payload.decision === "close" ? "closed" : "checked",
     }),
@@ -3123,9 +3140,11 @@ function buildPersistenceStatus() {
     },
     adminAuth: {
       enabled: ADMIN_AUTH_ENABLED,
-      loginIdHint: ADMIN_LOGIN_ID,
+      loginIdHint: getAdminLoginIdHint(),
+      defaultRole: ADMIN_DEFAULT_ROLE,
+      adminUsersCount: ADMIN_USERS.length,
       sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
-      passwordConfigured: Boolean(ADMIN_LOGIN_PASSWORD),
+      passwordConfigured: ADMIN_USERS.length > 0,
     },
     backup: {
       enabled: BACKUP_ENABLED,
@@ -4498,6 +4517,74 @@ function safeJsonParse(text, fallback) {
   }
 }
 
+function normalizeAdminRole(value, fallback = "manager") {
+  const role = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (role === "owner" || role === "manager") return role;
+  const fallbackRole = String(fallback || "")
+    .trim()
+    .toLowerCase();
+  if (fallbackRole === "owner" || fallbackRole === "manager") return fallbackRole;
+  return "manager";
+}
+
+function parseAdminUsersConfig({ rawJson, fallbackId, fallbackPassword, fallbackRole }) {
+  const result = [];
+  const byId = new Map();
+  const register = (idRaw, passwordRaw, roleRaw) => {
+    const id = String(idRaw || "").trim();
+    const password = String(passwordRaw || "").trim();
+    if (!id || !password) return;
+    byId.set(id, {
+      id,
+      password,
+      role: normalizeAdminRole(roleRaw, fallbackRole),
+    });
+  };
+
+  let parseError = "";
+  const raw = String(rawJson || "").trim();
+  if (raw) {
+    try {
+      const parsed = safeJsonParse(raw, null);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((row) => {
+          register(row?.id || row?.loginId, row?.password, row?.role || row?.adminRole);
+        });
+      } else if (parsed && typeof parsed === "object") {
+        if (Array.isArray(parsed.users)) {
+          parsed.users.forEach((row) => {
+            register(row?.id || row?.loginId, row?.password, row?.role || row?.adminRole);
+          });
+        } else {
+          Object.entries(parsed).forEach(([id, row]) => {
+            if (typeof row === "string") {
+              register(id, row, fallbackRole);
+              return;
+            }
+            register(id, row?.password, row?.role || row?.adminRole);
+          });
+        }
+      } else {
+        parseError = "ADMIN_USERS_JSON must be a JSON array or object";
+      }
+    } catch (error) {
+      parseError = `ADMIN_USERS_JSON parse failed: ${String(error?.message || error)}`;
+    }
+  }
+
+  if (!byId.size) {
+    register(fallbackId, fallbackPassword, fallbackRole);
+  }
+
+  byId.forEach((value) => result.push(value));
+  return {
+    users: result,
+    error: parseError,
+  };
+}
+
 function secureTextMatch(input, expected) {
   const left = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(input || "")).digest();
   const right = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(expected || "")).digest();
@@ -4583,13 +4670,39 @@ function clearAdminLoginFailure(req) {
   adminLoginAttempts.delete(ip);
 }
 
+function getAdminLoginIdHint() {
+  return String(ADMIN_USERS[0]?.id || ADMIN_LOGIN_ID || "admin");
+}
+
+function findAdminRoleById(loginId) {
+  const id = String(loginId || "").trim();
+  if (!id) return ADMIN_DEFAULT_ROLE;
+  const row = ADMIN_USERS.find((user) => user.id === id);
+  return normalizeAdminRole(row?.role || ADMIN_DEFAULT_ROLE, ADMIN_DEFAULT_ROLE);
+}
+
+function findAdminUserByCredentials(loginId, password) {
+  const idInput = String(loginId || "").trim();
+  const passwordInput = String(password || "").trim();
+  let matchedUser = null;
+  for (const user of ADMIN_USERS) {
+    const idOk = secureTextMatch(idInput, user.id);
+    const passwordOk = secureTextMatch(passwordInput, user.password);
+    if (idOk && passwordOk) {
+      matchedUser = user;
+    }
+  }
+  return matchedUser;
+}
+
 function buildAdminAuthConfigWarnings() {
   const warnings = [];
-  if (!ADMIN_LOGIN_PASSWORD) warnings.push("ADMIN_LOGIN_PASSWORD is not configured");
+  if (!ADMIN_USERS.length) warnings.push("admin credentials are not configured");
+  if (ADMIN_USERS_CONFIG_ERROR) warnings.push(ADMIN_USERS_CONFIG_ERROR);
   if (!ADMIN_SESSION_SECRET_RAW && !process.env.LINE_CHANNEL_SECRET && !process.env.LINE_CHANNEL_SECRET_2) {
     warnings.push("ADMIN_SESSION_SECRET is not configured");
   }
-  if (ADMIN_LOGIN_ID === "admin") warnings.push("ADMIN_LOGIN_ID is using default value");
+  if (getAdminLoginIdHint() === "admin") warnings.push("ADMIN login ID is using default value");
   return warnings;
 }
 
@@ -4599,11 +4712,13 @@ function buildAdminAuthConfigSnapshot(req) {
   const secretConfigured = Boolean(ADMIN_SESSION_SECRET_RAW || process.env.LINE_CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET_2);
   return {
     enabled: ADMIN_AUTH_ENABLED,
-    loginIdHint: ADMIN_LOGIN_ID,
+    loginIdHint: getAdminLoginIdHint(),
+    defaultRole: ADMIN_DEFAULT_ROLE,
+    adminUsersCount: ADMIN_USERS.length,
     sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
-    passwordConfigured: Boolean(ADMIN_LOGIN_PASSWORD),
+    passwordConfigured: ADMIN_USERS.length > 0,
     sessionSecretConfigured: Boolean(ADMIN_SESSION_SECRET_RAW),
-    configValid: !ADMIN_AUTH_ENABLED || (Boolean(ADMIN_LOGIN_PASSWORD) && secretConfigured),
+    configValid: !ADMIN_AUTH_ENABLED || (ADMIN_USERS.length > 0 && secretConfigured),
     warnings,
     throttlePolicy: {
       maxAttempts: ADMIN_LOGIN_MAX_ATTEMPTS,
@@ -4641,7 +4756,18 @@ function verifyAdminSessionToken(token) {
   if (!Number.isFinite(exp) || exp <= nowSec) return { ok: false, error: "token_expired", payload: null };
   const tenant = String(payload.tenant || APP_TENANT_ID);
   if (tenant !== APP_TENANT_ID) return { ok: false, error: "token_tenant_mismatch", payload: null };
-  return { ok: true, error: "", payload };
+  const subject = String(payload.sub || "").trim();
+  if (!subject) return { ok: false, error: "token_subject_missing", payload: null };
+  const role = normalizeAdminRole(payload.role || findAdminRoleById(subject), ADMIN_DEFAULT_ROLE);
+  return {
+    ok: true,
+    error: "",
+    payload: {
+      ...payload,
+      sub: subject,
+      role,
+    },
+  };
 }
 
 function extractAdminTokenFromRequest(req) {
@@ -4658,6 +4784,28 @@ function extractAdminTokenFromRequest(req) {
 function verifyAdminSessionFromRequest(req) {
   const token = extractAdminTokenFromRequest(req);
   return verifyAdminSessionToken(token);
+}
+
+function requireAdminRoles(roles = []) {
+  const requiredRoles = (Array.isArray(roles) ? roles : [roles])
+    .map((role) =>
+      String(role || "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter((role) => role === "owner" || role === "manager");
+  return (req, res, next) => {
+    if (!ADMIN_AUTH_ENABLED) return next();
+    const currentRole = normalizeAdminRole(req.adminAuth?.role || ADMIN_DEFAULT_ROLE, ADMIN_DEFAULT_ROLE);
+    if (!requiredRoles.length || requiredRoles.includes(currentRole)) return next();
+    return res.status(403).json({
+      ok: false,
+      error: "この操作を実行する権限がありません",
+      code: "AUTH_FORBIDDEN",
+      currentRole,
+      requiredRoles,
+    });
+  };
 }
 
 function deepCloneJson(value) {

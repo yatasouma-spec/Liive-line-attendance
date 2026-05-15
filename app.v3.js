@@ -19,6 +19,7 @@ const EMPLOYEE_SITE_LINK_KEY = "liiveAttendanceEmployeeSiteLinksV1";
 const ADMIN_AUTH_TOKEN_KEY = "liiveAdminAuthTokenV1";
 const ADMIN_AUTH_EXPIRES_KEY = "liiveAdminAuthExpiresAtV1";
 const ADMIN_AUTH_LOGIN_ID_KEY = "liiveAdminAuthLoginIdV1";
+const ADMIN_AUTH_ROLE_KEY = "liiveAdminAuthRoleV1";
 
 const API_ENABLED = window.location.protocol.startsWith("http");
 const API_POLL_MS = 5000;
@@ -129,6 +130,8 @@ const state = {
     token: loadText(ADMIN_AUTH_TOKEN_KEY, ""),
     expiresAt: loadText(ADMIN_AUTH_EXPIRES_KEY, ""),
     adminId: loadText(ADMIN_AUTH_LOGIN_ID_KEY, ""),
+    adminRole: loadText(ADMIN_AUTH_ROLE_KEY, ""),
+    defaultRole: "owner",
     loginIdHint: "admin",
     modalOpen: false,
     configError: "",
@@ -897,14 +900,28 @@ function isMonthLocked(month) {
   return false;
 }
 
-function setAuthSession(token, expiresAt, adminId = "") {
+function normalizeAdminRoleValue(value) {
+  const role = normalizeText(value).toLowerCase();
+  if (role === "owner" || role === "manager") return role;
+  return "";
+}
+
+function adminRoleLabel(role) {
+  if (role === "owner") return "オーナー";
+  if (role === "manager") return "管理者";
+  return "管理者";
+}
+
+function setAuthSession(token, expiresAt, adminId = "", adminRole = "") {
   state.auth.token = String(token || "");
   state.auth.expiresAt = String(expiresAt || "");
   state.auth.adminId = String(adminId || "");
+  state.auth.adminRole = normalizeAdminRoleValue(adminRole || state.auth.defaultRole || "");
   state.auth.loggedIn = !!state.auth.token;
   localStorage.setItem(ADMIN_AUTH_TOKEN_KEY, state.auth.token);
   localStorage.setItem(ADMIN_AUTH_EXPIRES_KEY, state.auth.expiresAt);
   localStorage.setItem(ADMIN_AUTH_LOGIN_ID_KEY, state.auth.adminId);
+  localStorage.setItem(ADMIN_AUTH_ROLE_KEY, state.auth.adminRole);
   updateAdminAuthUi();
 }
 
@@ -912,10 +929,12 @@ function clearAuthSession() {
   state.auth.token = "";
   state.auth.expiresAt = "";
   state.auth.adminId = "";
+  state.auth.adminRole = "";
   state.auth.loggedIn = false;
   localStorage.removeItem(ADMIN_AUTH_TOKEN_KEY);
   localStorage.removeItem(ADMIN_AUTH_EXPIRES_KEY);
   localStorage.removeItem(ADMIN_AUTH_LOGIN_ID_KEY);
+  localStorage.removeItem(ADMIN_AUTH_ROLE_KEY);
   stopApiPolling();
   updateAdminAuthUi();
 }
@@ -944,7 +963,8 @@ function updateAdminAuthUi() {
   if (state.auth.loggedIn) {
     statusEl.classList.add("ok");
     const expLabel = state.auth.expiresAt ? state.auth.expiresAt.slice(0, 16).replace("T", " ") : "-";
-    statusEl.textContent = `認証: ログイン中 (${state.auth.adminId || "admin"} / ${expLabel})`;
+    const roleLabel = adminRoleLabel(normalizeAdminRoleValue(state.auth.adminRole || state.auth.defaultRole));
+    statusEl.textContent = `認証: ログイン中 (${state.auth.adminId || "admin"}・${roleLabel} / ${expLabel})`;
     loginBtn.hidden = true;
     logoutBtn.hidden = false;
   } else if (state.auth.throttle?.locked) {
@@ -1080,6 +1100,7 @@ async function fetchAdminAuthConfig() {
     const data = await apiRequest("/api/auth/config", { skipAuthHandling: true });
     state.auth.enabled = !!data?.enabled;
     state.auth.loginIdHint = normalizeText(data?.loginIdHint || "admin") || "admin";
+    state.auth.defaultRole = normalizeAdminRoleValue(data?.defaultRole || "owner") || "owner";
     state.auth.configWarnings = normalizeAuthWarnings(data?.warnings);
     state.auth.throttlePolicy = normalizeAuthThrottlePolicy(data?.throttlePolicy);
     state.auth.throttle = normalizeAuthThrottle(data?.throttle);
@@ -1104,7 +1125,7 @@ async function checkAdminSession() {
   try {
     const data = await apiRequest("/api/auth/me", { skipAuthHandling: true });
     if (data?.ok && data?.loggedIn) {
-      setAuthSession(state.auth.token, data.expiresAt || state.auth.expiresAt, data.adminId || state.auth.adminId);
+      setAuthSession(state.auth.token, data.expiresAt || state.auth.expiresAt, data.adminId || state.auth.adminId, data.adminRole || "");
       state.auth.loggedIn = true;
       updateAdminAuthUi();
       return true;
@@ -1136,7 +1157,7 @@ async function loginAdmin(loginId, password) {
       await ensureApiPollingStarted();
       return true;
     }
-    setAuthSession(data.token || "", data.expiresAt || "", data.adminId || "");
+    setAuthSession(data.token || "", data.expiresAt || "", data.adminId || "", data.adminRole || "");
     hideAdminLoginModal();
     await ensureApiPollingStarted();
     await pullSnapshot();

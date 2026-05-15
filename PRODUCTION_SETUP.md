@@ -76,13 +76,30 @@ open "http://localhost:3000/index.html"
 
 ### 5-4. 管理者ログイン
 - `ADMIN_AUTH_ENABLED=true`
-- `ADMIN_LOGIN_ID`（例: `admin`）
-- `ADMIN_LOGIN_PASSWORD`（必須）
+- `ADMIN_USERS_JSON`（推奨: 複数管理者をJSONで定義）
+- `ADMIN_LOGIN_ID`（任意: `ADMIN_USERS_JSON` 未使用時のフォールバック）
+- `ADMIN_LOGIN_PASSWORD`（任意: `ADMIN_USERS_JSON` 未使用時のフォールバック）
+- `ADMIN_DEFAULT_ROLE`（任意: 既定 `owner`）
 - `ADMIN_SESSION_SECRET`（推奨）
 - `ADMIN_SESSION_TTL_HOURS`（任意: 既定 `12`）
 - `ADMIN_LOGIN_MAX_ATTEMPTS`（任意: 既定 `6`）
 - `ADMIN_LOGIN_WINDOW_MINUTES`（任意: 既定 `15`）
 - `ADMIN_LOGIN_LOCK_MINUTES`（任意: 既定 `30`）
+
+#### 管理者ユーザー設定例（推奨）
+```json
+[
+  { "id": "souma", "password": "xxxxxxxx", "role": "owner" },
+  { "id": "bucho-a", "password": "xxxxxxxx", "role": "manager" },
+  { "id": "bucho-b", "password": "xxxxxxxx", "role": "manager" },
+  { "id": "bucho-c", "password": "xxxxxxxx", "role": "manager" }
+]
+```
+
+- `role` は `owner` / `manager` を利用
+- 現在の権限差:
+  - `owner`: バックアップ即時実行、指示書PDF更新を含む全管理操作
+  - `manager`: 姿勢報告判定、社員/シフト同期、各種設定更新
 
 ### 5-5. 日次バックアップ
 - `BACKUP_ENABLED=true`
@@ -150,6 +167,7 @@ open "http://localhost:3000/index.html"
   - `/api/bootstrap` を未認証で叩くと 401
   - `/api/auth/login` でトークン発行できる
   - `/api/auth/login` で誤ログインを連続実行すると 429（`AUTH_RATE_LIMITED`）になる
+  - managerで `POST /api/system/backup-now` / `POST /api/manual/instruction-pdf` を叩くと 403（`AUTH_FORBIDDEN`）
 - Webhook署名エラーが出ない
 - LINEユーザーIDと社員名マップが正しい
 - CSV出力で勤怠データが取得できる
