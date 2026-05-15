@@ -12,6 +12,7 @@
   - `GET /api/bootstrap` 管理画面同期API
   - `GET /api/health` ヘルスチェック
   - `GET /api/system/persistence-status` 永続化/照合設定の確認API
+  - `GET /api/system/persistence-selfcheck` Supabase読書き/Storage疎通の自己診断API
 - `app.v3.js`
   - API優先モード（httpで開いた場合はAPI同期）
   - LINE打刻結果の自動反映（5秒ポーリング）
@@ -119,13 +120,14 @@ open "http://localhost:3000/index.html"
 
 ### 6-1. Supabase初期化
 1. Supabaseを作成
-2. SQL Editorで `supabase/init.sql` を実行
+2. SQL Editorで `supabase/init.sql` を実行（テーブル作成 + service_role専用GRANT + `pgrst` schema reload を含む）
 3. Storageバケット（例: `liive-evidence`, `liive-backups`）を作成
 4. （任意）マニュアルPDF用に `liive-manual` バケットを作成
 5. Render環境変数に `SUPABASE_*` を設定
 6. マニュアルPDFをSupabaseへ保存する場合は `MANUAL_SUPABASE_BUCKET`（例: `liive-manual`）を設定
 7. `/api/system/persistence-status` で `supabase.enabled=true` を確認
-8. 管理者ログインを有効化する場合は `ADMIN_*` も設定
+8. `/api/system/persistence-selfcheck` で `ok=true` を確認（読書き/Storage疎通）
+9. 管理者ログインを有効化する場合は `ADMIN_*` も設定
 
 ## 7. 動作確認シナリオ
 1. LINEで `出勤` を送る
@@ -142,6 +144,7 @@ open "http://localhost:3000/index.html"
 - HTTPSドメインで公開されている
 - `/api/health` が200で返る
 - `/api/system/persistence-status` が200で、設定値が想定どおり
+- `/api/system/persistence-selfcheck` が `ok=true`（少なくとも `supabase.canRead=true` / `supabase.canWrite=true`）
 - `/api/system/backup-status` が200で、スケジュール・最終実行が確認できる
 - `ADMIN_AUTH_ENABLED=true` の場合:
   - `/api/bootstrap` を未認証で叩くと 401

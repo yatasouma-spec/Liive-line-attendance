@@ -670,6 +670,11 @@ app.get("/api/system/persistence-status", (_req, res) => {
   res.json(buildPersistenceStatus());
 });
 
+app.get("/api/system/persistence-selfcheck", async (_req, res) => {
+  const report = await runPersistenceSelfCheck();
+  res.json(report);
+});
+
 app.get("/api/system/backup-status", (_req, res) => {
   res.json(buildBackupStatus());
 });
@@ -2911,6 +2916,178 @@ async function sendLinePush(to, text, options = {}) {
   } catch (_e) {
     return false;
   }
+}
+
+function normalizeSelfCheckError(error) {
+  return String(error?.message || error || "").trim();
+}
+
+async function checkSupabaseBucketAccess({ enabled, bucket, prefix }) {
+  const normalizedBucket = String(bucket || "").trim();
+  const normalizedPrefix = String(prefix || "").trim();
+  const report = {
+    enabled: Boolean(enabled),
+    bucket: normalizedBucket,
+    prefix: normalizedPrefix,
+    canList: false,
+    error: "",
+  };
+  if (!report.enabled) return report;
+  if (!supabase) {
+    report.error = "supabase client is not configured";
+    return report;
+  }
+  if (!normalizedBucket) {
+    report.error = "bucket is not configured";
+    return report;
+  }
+  try {
+    const { error } = await supabase.storage.from(normalizedBucket).list(normalizedPrefix || "", { limit: 1 });
+    if (error) {
+      report.error = normalizeSelfCheckError(error);
+      return report;
+    }
+    report.canList = true;
+    return report;
+  } catch (error) {
+    report.error = normalizeSelfCheckError(error);
+    return report;
+  }
+}
+
+async function runPersistenceSelfCheck() {
+  const checkedAt = new Date().toISOString();
+  const supabaseReport = {
+    configured: Boolean(supabase),
+    stateTable: SUPABASE_STATE_TABLE,
+    stateKey: SUPABASE_STATE_KEY,
+    canRead: false,
+    canWrite: false,
+    canCleanup: false,
+    probeKey: "",
+    readError: "",
+    writeError: "",
+    cleanupError: "",
+  };
+  const report = {
+    ok: true,
+    checkedAt,
+    tenantId: APP_TENANT_ID,
+    supabase: supabaseReport,
+    storage: {
+      evidence: {
+        enabled: false,
+        bucket: SUPABASE_STORAGE_BUCKET || "",
+        prefix: SUPABASE_EVIDENCE_PREFIX,
+        canList: false,
+        error: "",
+      },
+      manual: {
+        enabled: false,
+        bucket: MANUAL_SUPABASE_BUCKET || "",
+        prefix: MANUAL_SUPABASE_PREFIX,
+        canList: false,
+        error: "",
+      },
+      backup: {
+        enabled: false,
+        bucket: BACKUP_SUPABASE_BUCKET || "",
+        prefix: BACKUP_SUPABASE_PREFIX,
+        canList: false,
+        error: "",
+      },
+    },
+    warnings: [],
+  };
+
+  if (!supabase) {
+    report.ok = false;
+    supabaseReport.readError = "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY is not configured";
+    return report;
+  }
+
+  try {
+    const { error } = await supabase
+      .from(SUPABASE_STATE_TABLE)
+      .select("tenant_id")
+      .eq("tenant_id", APP_TENANT_ID)
+      .eq("state_key", SUPABASE_STATE_KEY)
+      .limit(1);
+    if (error) supabaseReport.readError = normalizeSelfCheckError(error);
+    else supabaseReport.canRead = true;
+  } catch (error) {
+    supabaseReport.readError = normalizeSelfCheckError(error);
+  }
+
+  const probeKey = `${SUPABASE_STATE_KEY}__selfcheck__${Date.now()}`;
+  supabaseReport.probeKey = probeKey;
+  try {
+    const { error } = await supabase.from(SUPABASE_STATE_TABLE).upsert(
+      {
+        tenant_id: APP_TENANT_ID,
+        state_key: probeKey,
+        data: {
+          probe: true,
+          at: checkedAt,
+        },
+        updated_at: checkedAt,
+      },
+      { onConflict: "tenant_id,state_key" }
+    );
+    if (error) supabaseReport.writeError = normalizeSelfCheckError(error);
+    else supabaseReport.canWrite = true;
+  } catch (error) {
+    supabaseReport.writeError = normalizeSelfCheckError(error);
+  }
+
+  if (supabaseReport.canWrite) {
+    try {
+      const { error } = await supabase.from(SUPABASE_STATE_TABLE).delete().eq("tenant_id", APP_TENANT_ID).eq("state_key", probeKey);
+      if (error) {
+        supabaseReport.cleanupError = normalizeSelfCheckError(error);
+      } else {
+        supabaseReport.canCleanup = true;
+      }
+    } catch (error) {
+      supabaseReport.cleanupError = normalizeSelfCheckError(error);
+    }
+  }
+
+  report.storage.evidence = await checkSupabaseBucketAccess({
+    enabled: isEvidenceStorageEnabled(),
+    bucket: SUPABASE_STORAGE_BUCKET,
+    prefix: SUPABASE_EVIDENCE_PREFIX,
+  });
+  report.storage.manual = await checkSupabaseBucketAccess({
+    enabled: isManualStorageEnabled(),
+    bucket: MANUAL_SUPABASE_BUCKET,
+    prefix: MANUAL_SUPABASE_PREFIX,
+  });
+  report.storage.backup = await checkSupabaseBucketAccess({
+    enabled: BACKUP_SUPABASE_UPLOAD,
+    bucket: BACKUP_SUPABASE_BUCKET,
+    prefix: BACKUP_SUPABASE_PREFIX,
+  });
+
+  if (!supabaseReport.canRead || !supabaseReport.canWrite) report.ok = false;
+  if (report.storage.evidence.enabled && !report.storage.evidence.canList) report.ok = false;
+  if (report.storage.manual.enabled && !report.storage.manual.canList) report.ok = false;
+  if (report.storage.backup.enabled && !report.storage.backup.canList) report.ok = false;
+
+  if (!supabaseReport.canCleanup && supabaseReport.canWrite) {
+    report.warnings.push("probe row cleanup failed; stale self-check row may remain");
+  }
+  if (!isEvidenceStorageEnabled()) {
+    report.warnings.push("SUPABASE_STORAGE_BUCKET is not configured");
+  }
+  if (!isManualStorageEnabled()) {
+    report.warnings.push("manual PDF is using local filesystem fallback");
+  }
+  if (!BACKUP_SUPABASE_UPLOAD) {
+    report.warnings.push("BACKUP_SUPABASE_UPLOAD is disabled");
+  }
+
+  return report;
 }
 
 function buildPersistenceStatus() {
