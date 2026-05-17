@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "NODE_ENV=development node server.js"
+    "dev": "NODE_ENV=development node server.js",
+    "admin:hash": "node scripts/admin-password-hash.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-rekognition": "^3.908.0",

@@ -13,6 +13,8 @@
   - `GET /api/health` ヘルスチェック
   - `GET /api/system/persistence-status` 永続化/照合設定の確認API
   - `GET /api/system/persistence-selfcheck` Supabase読書き/Storage疎通の自己診断API
+  - `GET /api/system/domain-sync-status` ドメインテーブル同期状態の確認API
+  - `POST /api/system/domain-sync-now` ドメインテーブル即時同期API（owner/manager）
 - `app.v3.js`
   - API優先モード（httpで開いた場合はAPI同期）
   - LINE打刻結果の自動反映（5秒ポーリング）
@@ -52,6 +54,17 @@ open "http://localhost:3000/index.html"
 - `SUPABASE_STATE_KEY`（任意: 既定 `liive-primary`）
 - `APP_TENANT_ID`（任意: 既定 `default`）
 
+### 5-1b. Supabase（ドメインテーブル同期）
+- `SUPABASE_DOMAIN_SYNC_ENABLED`（任意: 既定 `true`）
+- `SUPABASE_DOMAIN_SYNC_BATCH_SIZE`（任意: 既定 `500`）
+- `SUPABASE_TIMECARDS_TABLE`（任意: 既定 `liive_timecards`）
+- `SUPABASE_SHIFT_PLANS_TABLE`（任意: 既定 `liive_shift_plans`）
+- `SUPABASE_BEHAVIOR_REPORTS_TABLE`（任意: 既定 `liive_behavior_reports`）
+- `SUPABASE_CORRECTION_REQUESTS_TABLE`（任意: 既定 `liive_correction_requests`）
+- `SUPABASE_ALCOHOL_EVIDENCE_TABLE`（任意: 既定 `liive_alcohol_evidence`）
+- `SUPABASE_LINE_USER_MAP_TABLE`（任意: 既定 `liive_line_user_maps`）
+- `SUPABASE_EMPLOYEE_RULES_TABLE`（任意: 既定 `liive_employee_rules`）
+
 ### 5-2. Supabase Storage（証拠画像）
 - `SUPABASE_STORAGE_BUCKET`（例: `liive-evidence`）
 - `SUPABASE_EVIDENCE_PREFIX`（任意: 既定 `evidence`）
@@ -79,6 +92,7 @@ open "http://localhost:3000/index.html"
 - `ADMIN_USERS_JSON`（推奨: 複数管理者をJSONで定義）
 - `ADMIN_LOGIN_ID`（任意: `ADMIN_USERS_JSON` 未使用時のフォールバック）
 - `ADMIN_LOGIN_PASSWORD`（任意: `ADMIN_USERS_JSON` 未使用時のフォールバック）
+- `ADMIN_LOGIN_PASSWORD_HASH`（任意: `ADMIN_USERS_JSON` 未使用時のフォールバック。`scrypt$...` 形式）
 - `ADMIN_DEFAULT_ROLE`（任意: 既定 `owner`）
 - `ADMIN_SESSION_SECRET`（推奨）
 - `ADMIN_SESSION_TTL_HOURS`（任意: 既定 `12`）
@@ -89,14 +103,20 @@ open "http://localhost:3000/index.html"
 #### 管理者ユーザー設定例（推奨）
 ```json
 [
-  { "id": "souma", "password": "xxxxxxxx", "role": "owner" },
-  { "id": "bucho-a", "password": "xxxxxxxx", "role": "manager" },
-  { "id": "bucho-b", "password": "xxxxxxxx", "role": "manager" },
-  { "id": "bucho-c", "password": "xxxxxxxx", "role": "manager" }
+  { "id": "souma", "passwordHash": "scrypt$16384$8$1$...$...", "role": "owner" },
+  { "id": "bucho-a", "passwordHash": "scrypt$16384$8$1$...$...", "role": "manager" },
+  { "id": "bucho-b", "passwordHash": "scrypt$16384$8$1$...$...", "role": "manager" },
+  { "id": "bucho-c", "passwordHash": "scrypt$16384$8$1$...$...", "role": "manager" }
 ]
 ```
 
 - `role` は `owner` / `manager` を利用
+- `password`（平文）も互換維持で使えるが、本番は `passwordHash` 推奨
+- ハッシュ生成:
+```bash
+cd "/Users/souma/営業事業部/SNS事業部決算ツール月次/SellYouPLツール/新規事業デモツール"
+npm run admin:hash -- '強いパスワード'
+```
 - 現在の権限差:
   - `owner`: バックアップ即時実行、指示書PDF更新を含む全管理操作
   - `manager`: 姿勢報告判定、社員/シフト同期、各種設定更新
@@ -144,7 +164,9 @@ open "http://localhost:3000/index.html"
 6. マニュアルPDFをSupabaseへ保存する場合は `MANUAL_SUPABASE_BUCKET`（例: `liive-manual`）を設定
 7. `/api/system/persistence-status` で `supabase.enabled=true` を確認
 8. `/api/system/persistence-selfcheck` で `ok=true` を確認（読書き/Storage疎通）
-9. 管理者ログインを有効化する場合は `ADMIN_*` も設定
+9. `/api/system/domain-sync-status` で `enabled=true` を確認
+10. 必要に応じて `POST /api/system/domain-sync-now` を実行し、`tableCounts` が返ることを確認
+11. 管理者ログインを有効化する場合は `ADMIN_*` も設定
 
 ## 7. 動作確認シナリオ
 1. LINEで `出勤` を送る
@@ -162,6 +184,7 @@ open "http://localhost:3000/index.html"
 - `/api/health` が200で返る
 - `/api/system/persistence-status` が200で、設定値が想定どおり
 - `/api/system/persistence-selfcheck` が `ok=true`（少なくとも `supabase.canRead=true` / `supabase.canWrite=true`）
+- `/api/system/domain-sync-status` が `enabled=true` かつ `state.lastError` が空
 - `/api/system/backup-status` が200で、スケジュール・最終実行が確認できる
 - `ADMIN_AUTH_ENABLED=true` の場合:
   - `/api/bootstrap` を未認証で叩くと 401

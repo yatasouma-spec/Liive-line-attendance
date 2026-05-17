@@ -54,6 +54,20 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 const SUPABASE_STATE_TABLE = String(process.env.SUPABASE_STATE_TABLE || "app_state_snapshots").trim() || "app_state_snapshots";
 const SUPABASE_STATE_KEY = String(process.env.SUPABASE_STATE_KEY || "liive-primary").trim() || "liive-primary";
+const SUPABASE_DOMAIN_SYNC_ENABLED = parseBooleanEnv(process.env.SUPABASE_DOMAIN_SYNC_ENABLED, true);
+const SUPABASE_TIMECARDS_TABLE = String(process.env.SUPABASE_TIMECARDS_TABLE || "liive_timecards").trim() || "liive_timecards";
+const SUPABASE_SHIFT_PLANS_TABLE = String(process.env.SUPABASE_SHIFT_PLANS_TABLE || "liive_shift_plans").trim() || "liive_shift_plans";
+const SUPABASE_BEHAVIOR_REPORTS_TABLE =
+  String(process.env.SUPABASE_BEHAVIOR_REPORTS_TABLE || "liive_behavior_reports").trim() || "liive_behavior_reports";
+const SUPABASE_CORRECTION_REQUESTS_TABLE =
+  String(process.env.SUPABASE_CORRECTION_REQUESTS_TABLE || "liive_correction_requests").trim() || "liive_correction_requests";
+const SUPABASE_ALCOHOL_EVIDENCE_TABLE =
+  String(process.env.SUPABASE_ALCOHOL_EVIDENCE_TABLE || "liive_alcohol_evidence").trim() || "liive_alcohol_evidence";
+const SUPABASE_LINE_USER_MAP_TABLE =
+  String(process.env.SUPABASE_LINE_USER_MAP_TABLE || "liive_line_user_maps").trim() || "liive_line_user_maps";
+const SUPABASE_EMPLOYEE_RULES_TABLE =
+  String(process.env.SUPABASE_EMPLOYEE_RULES_TABLE || "liive_employee_rules").trim() || "liive_employee_rules";
+const SUPABASE_DOMAIN_SYNC_BATCH_SIZE = Math.min(1000, Math.max(50, Number(process.env.SUPABASE_DOMAIN_SYNC_BATCH_SIZE || 500)));
 const SUPABASE_STORAGE_BUCKET = String(process.env.SUPABASE_STORAGE_BUCKET || "").trim();
 const SUPABASE_EVIDENCE_PREFIX = String(process.env.SUPABASE_EVIDENCE_PREFIX || "evidence").trim() || "evidence";
 const MANUAL_SUPABASE_BUCKET = String(process.env.MANUAL_SUPABASE_BUCKET || SUPABASE_STORAGE_BUCKET || "").trim();
@@ -67,6 +81,7 @@ const AWS_TEXTRACT_ENABLED = parseBooleanEnv(process.env.AWS_TEXTRACT_ENABLED, f
 const ADMIN_AUTH_ENABLED = parseBooleanEnv(process.env.ADMIN_AUTH_ENABLED, false);
 const ADMIN_LOGIN_ID = String(process.env.ADMIN_LOGIN_ID || "admin").trim() || "admin";
 const ADMIN_LOGIN_PASSWORD = String(process.env.ADMIN_LOGIN_PASSWORD || "").trim();
+const ADMIN_LOGIN_PASSWORD_HASH = String(process.env.ADMIN_LOGIN_PASSWORD_HASH || "").trim();
 const ADMIN_DEFAULT_ROLE = normalizeAdminRole(process.env.ADMIN_DEFAULT_ROLE || process.env.ADMIN_ROLE || "owner", "owner");
 const ADMIN_USERS_JSON = String(process.env.ADMIN_USERS_JSON || "").trim();
 const ADMIN_SESSION_SECRET_RAW = String(process.env.ADMIN_SESSION_SECRET || "").trim();
@@ -82,6 +97,7 @@ const ADMIN_USERS_CONFIG = parseAdminUsersConfig({
   rawJson: ADMIN_USERS_JSON,
   fallbackId: ADMIN_LOGIN_ID,
   fallbackPassword: ADMIN_LOGIN_PASSWORD,
+  fallbackPasswordHash: ADMIN_LOGIN_PASSWORD_HASH,
   fallbackRole: ADMIN_DEFAULT_ROLE,
 });
 const ADMIN_USERS = ADMIN_USERS_CONFIG.users;
@@ -120,6 +136,16 @@ const remoteStateSync = {
   lastWarning: "",
   bootstrappedAt: null,
 };
+const domainTableSync = {
+  inFlight: false,
+  pending: null,
+  lastPayloadHash: "",
+  lastAttemptAt: null,
+  lastSyncedAt: null,
+  lastError: "",
+  lastWarning: "",
+  lastSummary: null,
+};
 const backupState = {
   inFlight: false,
   lastAttemptAt: null,
@@ -136,6 +162,7 @@ ensureDataFile();
 await initializeExternalPersistence();
 initializeBackupDirectory();
 ensureManualDataDirectory();
+enqueueDomainTableSync(readDb());
 
 app.post("/line/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const body = req.body;
@@ -708,6 +735,35 @@ app.post("/api/system/backup-now", requireAdminRoles(["owner"]), async (_req, re
     ok: true,
     result,
     status: buildBackupStatus(),
+  });
+});
+
+app.get("/api/system/domain-sync-status", (_req, res) => {
+  res.json(buildDomainSyncStatus());
+});
+
+app.post("/api/system/domain-sync-now", requireAdminRoles(["owner", "manager"]), async (_req, res) => {
+  if (!isDomainTableSyncEnabled()) {
+    return res.status(400).json({
+      ok: false,
+      error: "SUPABASE_DOMAIN_SYNC_ENABLED または Supabase接続設定が無効です",
+      status: buildDomainSyncStatus(),
+    });
+  }
+  const db = readDb();
+  const result = await syncDomainTablesSnapshot(db, { reason: "manual_api" });
+  if (!result.ok) {
+    return res.status(500).json({
+      ok: false,
+      error: result.error || "domain sync failed",
+      status: buildDomainSyncStatus(),
+      result,
+    });
+  }
+  return res.json({
+    ok: true,
+    result,
+    status: buildDomainSyncStatus(),
   });
 });
 
@@ -1316,6 +1372,11 @@ setInterval(() => {
 setInterval(() => {
   if (!supabase || !remoteStateSync.pending) return;
   drainRemoteStateSync().catch(() => {});
+}, 30 * 1000);
+
+setInterval(() => {
+  if (!isDomainTableSyncEnabled() || !domainTableSync.pending) return;
+  drainDomainTableSync().catch(() => {});
 }, 30 * 1000);
 
 setInterval(() => {
@@ -2972,6 +3033,37 @@ async function checkSupabaseBucketAccess({ enabled, bucket, prefix }) {
   }
 }
 
+async function checkSupabaseTableAccess({ enabled, table }) {
+  const normalizedTable = String(table || "").trim();
+  const report = {
+    enabled: Boolean(enabled),
+    table: normalizedTable,
+    canRead: false,
+    error: "",
+  };
+  if (!report.enabled) return report;
+  if (!supabase) {
+    report.error = "supabase client is not configured";
+    return report;
+  }
+  if (!normalizedTable) {
+    report.error = "table is not configured";
+    return report;
+  }
+  try {
+    const { error } = await supabase.from(normalizedTable).select("tenant_id").eq("tenant_id", APP_TENANT_ID).limit(1);
+    if (error) {
+      report.error = normalizeSelfCheckError(error);
+      return report;
+    }
+    report.canRead = true;
+    return report;
+  } catch (error) {
+    report.error = normalizeSelfCheckError(error);
+    return report;
+  }
+}
+
 async function runPersistenceSelfCheck() {
   const checkedAt = new Date().toISOString();
   const supabaseReport = {
@@ -2991,6 +3083,33 @@ async function runPersistenceSelfCheck() {
     checkedAt,
     tenantId: APP_TENANT_ID,
     supabase: supabaseReport,
+    domainSync: {
+      enabled: isDomainTableSyncEnabled(),
+      tables: {
+        timecards: { enabled: isDomainTableSyncEnabled(), table: SUPABASE_TIMECARDS_TABLE, canRead: false, error: "" },
+        shiftPlans: { enabled: isDomainTableSyncEnabled(), table: SUPABASE_SHIFT_PLANS_TABLE, canRead: false, error: "" },
+        behaviorReports: {
+          enabled: isDomainTableSyncEnabled(),
+          table: SUPABASE_BEHAVIOR_REPORTS_TABLE,
+          canRead: false,
+          error: "",
+        },
+        correctionRequests: {
+          enabled: isDomainTableSyncEnabled(),
+          table: SUPABASE_CORRECTION_REQUESTS_TABLE,
+          canRead: false,
+          error: "",
+        },
+        alcoholEvidence: {
+          enabled: isDomainTableSyncEnabled(),
+          table: SUPABASE_ALCOHOL_EVIDENCE_TABLE,
+          canRead: false,
+          error: "",
+        },
+        lineUserMaps: { enabled: isDomainTableSyncEnabled(), table: SUPABASE_LINE_USER_MAP_TABLE, canRead: false, error: "" },
+        employeeRules: { enabled: isDomainTableSyncEnabled(), table: SUPABASE_EMPLOYEE_RULES_TABLE, canRead: false, error: "" },
+      },
+    },
     storage: {
       evidence: {
         enabled: false,
@@ -3085,11 +3204,43 @@ async function runPersistenceSelfCheck() {
     bucket: BACKUP_SUPABASE_BUCKET,
     prefix: BACKUP_SUPABASE_PREFIX,
   });
+  report.domainSync.tables.timecards = await checkSupabaseTableAccess({
+    enabled: isDomainTableSyncEnabled(),
+    table: SUPABASE_TIMECARDS_TABLE,
+  });
+  report.domainSync.tables.shiftPlans = await checkSupabaseTableAccess({
+    enabled: isDomainTableSyncEnabled(),
+    table: SUPABASE_SHIFT_PLANS_TABLE,
+  });
+  report.domainSync.tables.behaviorReports = await checkSupabaseTableAccess({
+    enabled: isDomainTableSyncEnabled(),
+    table: SUPABASE_BEHAVIOR_REPORTS_TABLE,
+  });
+  report.domainSync.tables.correctionRequests = await checkSupabaseTableAccess({
+    enabled: isDomainTableSyncEnabled(),
+    table: SUPABASE_CORRECTION_REQUESTS_TABLE,
+  });
+  report.domainSync.tables.alcoholEvidence = await checkSupabaseTableAccess({
+    enabled: isDomainTableSyncEnabled(),
+    table: SUPABASE_ALCOHOL_EVIDENCE_TABLE,
+  });
+  report.domainSync.tables.lineUserMaps = await checkSupabaseTableAccess({
+    enabled: isDomainTableSyncEnabled(),
+    table: SUPABASE_LINE_USER_MAP_TABLE,
+  });
+  report.domainSync.tables.employeeRules = await checkSupabaseTableAccess({
+    enabled: isDomainTableSyncEnabled(),
+    table: SUPABASE_EMPLOYEE_RULES_TABLE,
+  });
 
   if (!supabaseReport.canRead || !supabaseReport.canWrite) report.ok = false;
   if (report.storage.evidence.enabled && !report.storage.evidence.canList) report.ok = false;
   if (report.storage.manual.enabled && !report.storage.manual.canList) report.ok = false;
   if (report.storage.backup.enabled && !report.storage.backup.canList) report.ok = false;
+  if (report.domainSync.enabled) {
+    const allReadable = Object.values(report.domainSync.tables).every((row) => row.canRead === true);
+    if (!allReadable) report.ok = false;
+  }
 
   if (!supabaseReport.canCleanup && supabaseReport.canWrite) {
     report.warnings.push("probe row cleanup failed; stale self-check row may remain");
@@ -3102,6 +3253,9 @@ async function runPersistenceSelfCheck() {
   }
   if (!BACKUP_SUPABASE_UPLOAD) {
     report.warnings.push("BACKUP_SUPABASE_UPLOAD is disabled");
+  }
+  if (!isDomainTableSyncEnabled()) {
+    report.warnings.push("SUPABASE_DOMAIN_SYNC_ENABLED is disabled");
   }
 
   return report;
@@ -3121,6 +3275,7 @@ function buildPersistenceStatus() {
       lastWarning: remoteStateSync.lastWarning,
       pendingSync: Boolean(remoteStateSync.pending),
     },
+    domainSync: buildDomainSyncStatus(),
     storage: {
       enabled: isEvidenceStorageEnabled(),
       bucket: SUPABASE_STORAGE_BUCKET || "",
@@ -3183,6 +3338,35 @@ function buildBackupStatus() {
       lastError: backupState.lastError,
       lastSkippedReason: backupState.lastSkippedReason,
     },
+  };
+}
+
+function isDomainTableSyncEnabled() {
+  return Boolean(supabase && SUPABASE_DOMAIN_SYNC_ENABLED);
+}
+
+function buildDomainSyncStatus() {
+  return {
+    enabled: isDomainTableSyncEnabled(),
+    tables: {
+      timecards: SUPABASE_TIMECARDS_TABLE,
+      shiftPlans: SUPABASE_SHIFT_PLANS_TABLE,
+      behaviorReports: SUPABASE_BEHAVIOR_REPORTS_TABLE,
+      correctionRequests: SUPABASE_CORRECTION_REQUESTS_TABLE,
+      alcoholEvidence: SUPABASE_ALCOHOL_EVIDENCE_TABLE,
+      lineUserMaps: SUPABASE_LINE_USER_MAP_TABLE,
+      employeeRules: SUPABASE_EMPLOYEE_RULES_TABLE,
+    },
+    batchSize: SUPABASE_DOMAIN_SYNC_BATCH_SIZE,
+    state: {
+      inFlight: domainTableSync.inFlight,
+      pendingSync: Boolean(domainTableSync.pending),
+      lastAttemptAt: domainTableSync.lastAttemptAt,
+      lastSyncedAt: domainTableSync.lastSyncedAt,
+      lastError: domainTableSync.lastError,
+      lastWarning: domainTableSync.lastWarning,
+    },
+    lastSummary: domainTableSync.lastSummary,
   };
 }
 
@@ -3454,6 +3638,319 @@ async function upsertRemoteStateToSupabase(data) {
   }
   remoteStateSync.lastError = remoteStateSync.lastWarning || "remote sync failed";
   return false;
+}
+
+function enqueueDomainTableSync(data) {
+  if (!isDomainTableSyncEnabled()) return;
+  domainTableSync.pending = deepCloneJson(data);
+  if (domainTableSync.inFlight) return;
+  void drainDomainTableSync();
+}
+
+async function drainDomainTableSync() {
+  if (!isDomainTableSyncEnabled() || domainTableSync.inFlight) return;
+  domainTableSync.inFlight = true;
+  try {
+    while (domainTableSync.pending) {
+      const snapshot = domainTableSync.pending;
+      domainTableSync.pending = null;
+      const result = await syncDomainTablesSnapshot(snapshot, { reason: "auto_write" });
+      if (!result.ok) {
+        domainTableSync.pending = snapshot;
+        break;
+      }
+    }
+  } finally {
+    domainTableSync.inFlight = false;
+  }
+}
+
+function buildDomainSyncPayloadHash(db) {
+  const payload = {
+    timecards: Array.isArray(db?.timecards) ? db.timecards : [],
+    shiftPlans: Array.isArray(db?.shiftPlans) ? db.shiftPlans : [],
+    behaviorReports: Array.isArray(db?.behaviorReports) ? db.behaviorReports : [],
+    lineCorrectionRequests: Array.isArray(db?.lineCorrectionRequests) ? db.lineCorrectionRequests : [],
+    alcoholEvidence: Array.isArray(db?.alcoholEvidence) ? db.alcoholEvidence : [],
+    userMap: db?.userMap || {},
+    employeeRules: db?.employeeRules || {},
+  };
+  return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");
+}
+
+async function syncDomainTablesSnapshot(db, options = {}) {
+  if (!isDomainTableSyncEnabled()) {
+    return { ok: false, error: "domain sync disabled", skipped: true, reason: "disabled" };
+  }
+  const attemptedAt = new Date().toISOString();
+  domainTableSync.lastAttemptAt = attemptedAt;
+  const payloadHash = buildDomainSyncPayloadHash(db);
+  if (payloadHash && payloadHash === domainTableSync.lastPayloadHash) {
+    const skippedResult = {
+      ok: true,
+      skipped: true,
+      reason: "unchanged_payload",
+      attemptedAt,
+      completedAt: attemptedAt,
+      tableCounts: {},
+    };
+    domainTableSync.lastSummary = skippedResult;
+    domainTableSync.lastWarning = "";
+    return skippedResult;
+  }
+
+  const nowIso = attemptedAt;
+  const rowsByTable = buildDomainSyncRows(db, nowIso);
+  const tableCounts = Object.fromEntries(
+    Object.entries(rowsByTable).map(([key, value]) => [key, Array.isArray(value) ? value.length : 0])
+  );
+  try {
+    await upsertRowsByChunks(SUPABASE_TIMECARDS_TABLE, rowsByTable.timecards, "tenant_id,source_key");
+    await upsertRowsByChunks(SUPABASE_SHIFT_PLANS_TABLE, rowsByTable.shiftPlans, "tenant_id,plan_key");
+    await upsertRowsByChunks(SUPABASE_BEHAVIOR_REPORTS_TABLE, rowsByTable.behaviorReports, "tenant_id,report_id");
+    await upsertRowsByChunks(SUPABASE_CORRECTION_REQUESTS_TABLE, rowsByTable.correctionRequests, "tenant_id,request_id");
+    await upsertRowsByChunks(SUPABASE_ALCOHOL_EVIDENCE_TABLE, rowsByTable.alcoholEvidence, "tenant_id,evidence_key");
+    await upsertRowsByChunks(SUPABASE_LINE_USER_MAP_TABLE, rowsByTable.lineUserMaps, "tenant_id,line_user_id");
+    await upsertRowsByChunks(SUPABASE_EMPLOYEE_RULES_TABLE, rowsByTable.employeeRules, "tenant_id,employee_key");
+
+    const completedAt = new Date().toISOString();
+    const result = {
+      ok: true,
+      skipped: false,
+      reason: String(options.reason || "manual"),
+      attemptedAt,
+      completedAt,
+      tableCounts,
+    };
+    domainTableSync.lastPayloadHash = payloadHash;
+    domainTableSync.lastSyncedAt = completedAt;
+    domainTableSync.lastError = "";
+    domainTableSync.lastWarning = "";
+    domainTableSync.lastSummary = result;
+    return result;
+  } catch (error) {
+    const message = String(error?.message || error || "domain sync failed");
+    domainTableSync.lastError = message;
+    domainTableSync.lastWarning = message;
+    const failed = {
+      ok: false,
+      skipped: false,
+      reason: String(options.reason || "manual"),
+      attemptedAt,
+      completedAt: new Date().toISOString(),
+      tableCounts,
+      error: message,
+    };
+    domainTableSync.lastSummary = failed;
+    return failed;
+  }
+}
+
+function buildDomainSyncRows(db, nowIso) {
+  return {
+    timecards: buildDomainTimecardRows(db, nowIso),
+    shiftPlans: buildDomainShiftPlanRows(db, nowIso),
+    behaviorReports: buildDomainBehaviorReportRows(db, nowIso),
+    correctionRequests: buildDomainCorrectionRows(db, nowIso),
+    alcoholEvidence: buildDomainAlcoholEvidenceRows(db, nowIso),
+    lineUserMaps: buildDomainLineUserMapRows(db, nowIso),
+    employeeRules: buildDomainEmployeeRuleRows(db, nowIso),
+  };
+}
+
+function buildDomainTimecardRows(db, nowIso) {
+  return (Array.isArray(db?.timecards) ? db.timecards : []).map((row) => {
+    const fallbackKey = buildStableHashKey([
+      row?.date,
+      row?.employee,
+      row?.site,
+      row?.checkIn,
+      row?.checkOut,
+      row?.lineUserId,
+    ]);
+    const sourceKey = String(row?.sourceKey || fallbackKey).trim() || fallbackKey;
+    return {
+      tenant_id: APP_TENANT_ID,
+      source_key: sourceKey,
+      work_date: normalizeYmd(row?.date) || null,
+      employee: String(row?.employee || ""),
+      site: String(row?.site || ""),
+      line_user_id: String(row?.lineUserId || ""),
+      check_in: String(row?.checkIn || ""),
+      check_out: String(row?.checkOut || ""),
+      hours: normalizeFiniteNumber(row?.hours),
+      overtime: normalizeFiniteNumber(row?.overtime),
+      status: String(row?.overtimeApprovalStatus || ""),
+      data: deepCloneJson(row || {}),
+      updated_at: nowIso,
+    };
+  });
+}
+
+function buildDomainShiftPlanRows(db, nowIso) {
+  return (Array.isArray(db?.shiftPlans) ? db.shiftPlans : []).map((row) => {
+    const fallbackKey = buildStableHashKey([row?.date, row?.employee, row?.start, row?.end, row?.route]);
+    const planKey = String(row?.id || fallbackKey).trim() || fallbackKey;
+    return {
+      tenant_id: APP_TENANT_ID,
+      plan_key: planKey,
+      plan_id: String(row?.id || ""),
+      work_date: normalizeYmd(row?.date) || null,
+      employee: String(row?.employee || ""),
+      start_time: String(row?.start || ""),
+      end_time: String(row?.end || ""),
+      route: String(row?.route || ""),
+      data: deepCloneJson(row || {}),
+      updated_at: nowIso,
+    };
+  });
+}
+
+function buildDomainBehaviorReportRows(db, nowIso) {
+  return (Array.isArray(db?.behaviorReports) ? db.behaviorReports : []).map((row) => {
+    const fallbackKey = buildStableHashKey([row?.attendanceDate, row?.employee, row?.submittedAt, row?.lineUserId]);
+    const reportId = String(row?.id || fallbackKey).trim() || fallbackKey;
+    return {
+      tenant_id: APP_TENANT_ID,
+      report_id: reportId,
+      attendance_date: normalizeYmd(row?.attendanceDate) || null,
+      employee: String(row?.employee || ""),
+      site: String(row?.site || ""),
+      line_user_id: String(row?.lineUserId || ""),
+      status: String(row?.status || ""),
+      submitted_at: normalizeIsoText(row?.submittedAt),
+      deadline_at: normalizeIsoText(row?.deadlineAt),
+      updated_at: nowIso,
+      data: deepCloneJson(row || {}),
+    };
+  });
+}
+
+function buildDomainCorrectionRows(db, nowIso) {
+  return (Array.isArray(db?.lineCorrectionRequests) ? db.lineCorrectionRequests : []).map((row) => {
+    const fallbackKey = buildStableHashKey([row?.createdAt, row?.userId, row?.employee, row?.message]);
+    const requestId = String(row?.id || fallbackKey).trim() || fallbackKey;
+    return {
+      tenant_id: APP_TENANT_ID,
+      request_id: requestId,
+      employee: String(row?.employee || ""),
+      line_user_id: String(row?.userId || ""),
+      site: String(row?.site || ""),
+      status: String(row?.status || ""),
+      message: String(row?.message || ""),
+      created_at: normalizeIsoText(row?.createdAt) || nowIso,
+      updated_at: nowIso,
+      data: deepCloneJson(row || {}),
+    };
+  });
+}
+
+function buildDomainAlcoholEvidenceRows(db, nowIso) {
+  return (Array.isArray(db?.alcoholEvidence) ? db.alcoholEvidence : []).map((row) => {
+    const fallbackKey = buildStableHashKey([
+      row?.at,
+      row?.userId,
+      row?.employee,
+      row?.meterImageId,
+      row?.faceImageId,
+      row?.lineChannel,
+    ]);
+    const evidenceKey = String(row?.id || fallbackKey).trim() || fallbackKey;
+    return {
+      tenant_id: APP_TENANT_ID,
+      evidence_key: evidenceKey,
+      employee: String(row?.employee || ""),
+      line_user_id: String(row?.userId || ""),
+      site: String(row?.site || ""),
+      line_channel: normalizeLineChannel(row?.lineChannel || "primary"),
+      alcohol_value: normalizeFiniteNumber(row?.alcoholValue),
+      meter_image_id: String(row?.meterImageId || ""),
+      face_image_id: String(row?.faceImageId || ""),
+      recorded_at: normalizeIsoText(row?.at) || nowIso,
+      expires_at: normalizeIsoFromEpoch(row?.expiresAt),
+      updated_at: nowIso,
+      data: deepCloneJson(row || {}),
+    };
+  });
+}
+
+function buildDomainLineUserMapRows(db, nowIso) {
+  const map = db?.userMap || {};
+  return Object.keys(map).map((lineUserId) => {
+    const row = map[lineUserId] || {};
+    return {
+      tenant_id: APP_TENANT_ID,
+      line_user_id: String(lineUserId || ""),
+      employee_id: String(row?.employeeId || ""),
+      employee_name: String(row?.employeeName || row?.employee || ""),
+      site: String(row?.site || ""),
+      line_channel: normalizeLineChannel(row?.lineChannel || "primary"),
+      site_link_id: String(row?.siteLinkId || ""),
+      updated_at: nowIso,
+      data: deepCloneJson(row || {}),
+    };
+  });
+}
+
+function buildDomainEmployeeRuleRows(db, nowIso) {
+  const map = db?.employeeRules || {};
+  return Object.keys(map).map((employeeKey) => {
+    const row = map[employeeKey] || {};
+    return {
+      tenant_id: APP_TENANT_ID,
+      employee_key: String(employeeKey || ""),
+      employee_id: String(row?.id || ""),
+      employee_code: String(row?.code || ""),
+      active: parseBooleanValue(row?.active, true),
+      requires_alcohol_check: parseBooleanValue(row?.requiresAlcoholCheck, true),
+      work_start: String(row?.workStart || ""),
+      work_end: String(row?.workEnd || ""),
+      updated_at: nowIso,
+      data: deepCloneJson(row || {}),
+    };
+  });
+}
+
+function buildStableHashKey(parts) {
+  const base = (Array.isArray(parts) ? parts : [])
+    .map((v) => String(v ?? ""))
+    .join("|");
+  return crypto.createHash("sha1").update(base).digest("hex");
+}
+
+function normalizeIsoText(value) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function normalizeIsoFromEpoch(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  const date = new Date(num);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function normalizeFiniteNumber(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return num;
+}
+
+async function upsertRowsByChunks(tableName, rows, onConflict) {
+  const safeName = String(tableName || "").trim();
+  if (!safeName) throw new Error("table name is empty");
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return;
+  for (let i = 0; i < list.length; i += SUPABASE_DOMAIN_SYNC_BATCH_SIZE) {
+    const chunk = list.slice(i, i + SUPABASE_DOMAIN_SYNC_BATCH_SIZE);
+    const { error } = await supabase.from(safeName).upsert(chunk, { onConflict });
+    if (error) {
+      throw new Error(`[${safeName}] ${String(error?.message || error)}`);
+    }
+  }
 }
 
 function isEvidenceStorageEnabled() {
@@ -4430,6 +4927,7 @@ function writeDb(data, options = {}) {
   const normalized = hydrateDbShape(data);
   fs.writeFileSync(DB_FILE, JSON.stringify(normalized, null, 2), "utf8");
   if (!options.skipRemoteSync) enqueueRemoteStateSync(normalized);
+  if (!options.skipDomainSync) enqueueDomainTableSync(normalized);
 }
 
 function createEmptyDb() {
@@ -4529,16 +5027,28 @@ function normalizeAdminRole(value, fallback = "manager") {
   return "manager";
 }
 
-function parseAdminUsersConfig({ rawJson, fallbackId, fallbackPassword, fallbackRole }) {
+function normalizeAdminPasswordHash(value) {
+  const raw = String(value || "").trim();
+  return raw || "";
+}
+
+function parseAdminUsersConfig({ rawJson, fallbackId, fallbackPassword, fallbackPasswordHash, fallbackRole }) {
   const result = [];
   const byId = new Map();
-  const register = (idRaw, passwordRaw, roleRaw) => {
+  const invalidHashUsers = new Set();
+  const register = (idRaw, passwordRaw, passwordHashRaw, roleRaw) => {
     const id = String(idRaw || "").trim();
     const password = String(passwordRaw || "").trim();
-    if (!id || !password) return;
+    let passwordHash = normalizeAdminPasswordHash(passwordHashRaw);
+    if (passwordHash && !parseAdminPasswordHash(passwordHash)) {
+      invalidHashUsers.add(id || "(unknown)");
+      passwordHash = "";
+    }
+    if (!id || (!password && !passwordHash)) return;
     byId.set(id, {
       id,
       password,
+      passwordHash,
       role: normalizeAdminRole(roleRaw, fallbackRole),
     });
   };
@@ -4550,20 +5060,30 @@ function parseAdminUsersConfig({ rawJson, fallbackId, fallbackPassword, fallback
       const parsed = safeJsonParse(raw, null);
       if (Array.isArray(parsed)) {
         parsed.forEach((row) => {
-          register(row?.id || row?.loginId, row?.password, row?.role || row?.adminRole);
+          register(
+            row?.id || row?.loginId,
+            row?.password,
+            row?.passwordHash || row?.password_hash || row?.hash,
+            row?.role || row?.adminRole
+          );
         });
       } else if (parsed && typeof parsed === "object") {
         if (Array.isArray(parsed.users)) {
           parsed.users.forEach((row) => {
-            register(row?.id || row?.loginId, row?.password, row?.role || row?.adminRole);
+            register(
+              row?.id || row?.loginId,
+              row?.password,
+              row?.passwordHash || row?.password_hash || row?.hash,
+              row?.role || row?.adminRole
+            );
           });
         } else {
           Object.entries(parsed).forEach(([id, row]) => {
             if (typeof row === "string") {
-              register(id, row, fallbackRole);
+              register(id, row, "", fallbackRole);
               return;
             }
-            register(id, row?.password, row?.role || row?.adminRole);
+            register(id, row?.password, row?.passwordHash || row?.password_hash || row?.hash, row?.role || row?.adminRole);
           });
         }
       } else {
@@ -4575,7 +5095,13 @@ function parseAdminUsersConfig({ rawJson, fallbackId, fallbackPassword, fallback
   }
 
   if (!byId.size) {
-    register(fallbackId, fallbackPassword, fallbackRole);
+    register(fallbackId, fallbackPassword, fallbackPasswordHash, fallbackRole);
+  }
+
+  if (invalidHashUsers.size) {
+    const invalidList = Array.from(invalidHashUsers).join(", ");
+    const message = `invalid admin passwordHash for: ${invalidList}`;
+    parseError = parseError ? `${parseError}; ${message}` : message;
   }
 
   byId.forEach((value) => result.push(value));
@@ -4589,6 +5115,63 @@ function secureTextMatch(input, expected) {
   const left = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(input || "")).digest();
   const right = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(String(expected || "")).digest();
   return crypto.timingSafeEqual(left, right);
+}
+
+function decodeBase64UrlSegment(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    return Buffer.from(raw, "base64url");
+  } catch (_error) {
+    return null;
+  }
+}
+
+function normalizeScryptCost(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  const rounded = Math.floor(numeric);
+  if (rounded < min || rounded > max) return fallback;
+  return rounded;
+}
+
+function parseAdminPasswordHash(serializedHash) {
+  const raw = String(serializedHash || "").trim();
+  if (!raw) return null;
+  const parts = raw.split("$");
+  if (parts.length !== 6) return null;
+  if (parts[0] !== "scrypt") return null;
+  const N = normalizeScryptCost(parts[1], 0, 1024, 2 ** 20);
+  const r = normalizeScryptCost(parts[2], 0, 1, 32);
+  const p = normalizeScryptCost(parts[3], 0, 1, 32);
+  if (!N || !r || !p) return null;
+  const salt = decodeBase64UrlSegment(parts[4]);
+  const digest = decodeBase64UrlSegment(parts[5]);
+  if (!salt || !salt.length || !digest || !digest.length) return null;
+  return {
+    algorithm: "scrypt",
+    N,
+    r,
+    p,
+    salt,
+    digest,
+  };
+}
+
+function verifyAdminPasswordHash(passwordInput, serializedHash) {
+  const parsed = parseAdminPasswordHash(serializedHash);
+  if (!parsed) return false;
+  try {
+    const derived = crypto.scryptSync(String(passwordInput || ""), parsed.salt, parsed.digest.length, {
+      N: parsed.N,
+      r: parsed.r,
+      p: parsed.p,
+      maxmem: Math.max(32 * 1024 * 1024, 128 * parsed.N * parsed.r + 1024 * 1024),
+    });
+    return crypto.timingSafeEqual(derived, parsed.digest);
+  } catch (_error) {
+    return false;
+  }
 }
 
 function extractClientIp(req) {
@@ -4687,7 +5270,9 @@ function findAdminUserByCredentials(loginId, password) {
   let matchedUser = null;
   for (const user of ADMIN_USERS) {
     const idOk = secureTextMatch(idInput, user.id);
-    const passwordOk = secureTextMatch(passwordInput, user.password);
+    const passwordOk = user.passwordHash
+      ? verifyAdminPasswordHash(passwordInput, user.passwordHash)
+      : secureTextMatch(passwordInput, user.password);
     if (idOk && passwordOk) {
       matchedUser = user;
     }
@@ -4699,6 +5284,9 @@ function buildAdminAuthConfigWarnings() {
   const warnings = [];
   if (!ADMIN_USERS.length) warnings.push("admin credentials are not configured");
   if (ADMIN_USERS_CONFIG_ERROR) warnings.push(ADMIN_USERS_CONFIG_ERROR);
+  if (ADMIN_USERS.some((user) => user.password && !user.passwordHash)) {
+    warnings.push("admin users include plain-text password entries; passwordHash is recommended for production");
+  }
   if (!ADMIN_SESSION_SECRET_RAW && !process.env.LINE_CHANNEL_SECRET && !process.env.LINE_CHANNEL_SECRET_2) {
     warnings.push("ADMIN_SESSION_SECRET is not configured");
   }
@@ -4715,6 +5303,7 @@ function buildAdminAuthConfigSnapshot(req) {
     loginIdHint: getAdminLoginIdHint(),
     defaultRole: ADMIN_DEFAULT_ROLE,
     adminUsersCount: ADMIN_USERS.length,
+    hashedUsersCount: ADMIN_USERS.filter((user) => Boolean(user.passwordHash)).length,
     sessionTtlHours: ADMIN_SESSION_TTL_HOURS,
     passwordConfigured: ADMIN_USERS.length > 0,
     sessionSecretConfigured: Boolean(ADMIN_SESSION_SECRET_RAW),
