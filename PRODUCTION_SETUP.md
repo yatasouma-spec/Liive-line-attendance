@@ -155,6 +155,27 @@ npm run admin:hash -- '強いパスワード'
 4. Environment Variablesに上記環境変数を登録
 5. デプロイ後のURLをLINE Webhook URLへ設定
 
+### 6-0. 自動デプロイ/自動チェック（GitHub Actions）
+- 追加済み: `.github/workflows/deploy-and-smoke.yml`
+- 動作:
+  - `main` へのpush時に起動
+  - `RENDER_DEPLOY_HOOK_URL` が設定されていれば Render Deploy Hook を叩く
+  - 90秒待機後、`/api/health` などのスモークチェックを実行
+
+#### GitHubで1回だけ設定するもの
+- `Settings > Secrets and variables > Actions` で以下を登録
+  - Secret `RENDER_DEPLOY_HOOK_URL`（任意: Deploy Hook運用する場合）
+  - Secret `ADMIN_SMOKE_LOGIN_ID`（任意: 管理者認証有効時の深い疎通確認用）
+  - Secret `ADMIN_SMOKE_PASSWORD`（任意）
+  - Variable `LIIVE_BASE_URL`（任意: 例 `https://liive-line-attendance.onrender.com`）
+
+#### 補足
+- Render側で GitHub Auto Deploy がONなら、`RENDER_DEPLOY_HOOK_URL` が無くても自動デプロイは進行します。
+- ローカルから本番スモークチェックを実行する場合:
+```bash
+npm run smoke:prod
+```
+
 ### 6-1. Supabase初期化
 1. Supabaseを作成
 2. SQL Editorで `supabase/init.sql` を実行（テーブル作成 + service_role専用GRANT + `pgrst` schema reload を含む）
