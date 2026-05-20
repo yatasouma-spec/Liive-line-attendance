@@ -544,6 +544,12 @@ button {
   background: color-mix(in srgb, var(--surface-soft) 45%, #fff 55%);
 }
 
+#behaviorReminderForm .btn {
+  width: auto;
+  justify-self: start;
+  white-space: nowrap;
+}
+
 .inline-check {
   grid-column: 1 / -1;
   display: inline-flex;
