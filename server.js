@@ -78,7 +78,8 @@ const ALCOHOL_OCR_TOLERANCE = clampDecimal(process.env.ALCOHOL_OCR_TOLERANCE, 0.
 const AWS_REGION = String(process.env.AWS_REGION || "ap-northeast-1").trim() || "ap-northeast-1";
 const AWS_REKOGNITION_ENABLED = parseBooleanEnv(process.env.AWS_REKOGNITION_ENABLED, false);
 const AWS_TEXTRACT_ENABLED = parseBooleanEnv(process.env.AWS_TEXTRACT_ENABLED, false);
-const ADMIN_AUTH_ENABLED = parseBooleanEnv(process.env.ADMIN_AUTH_ENABLED, false);
+// MVP期間は管理者ログインを常時無効化（初回パスワード入力を出さない）
+const ADMIN_AUTH_ENABLED = false;
 const ADMIN_LOGIN_ID = String(process.env.ADMIN_LOGIN_ID || "admin").trim() || "admin";
 const ADMIN_LOGIN_PASSWORD = String(process.env.ADMIN_LOGIN_PASSWORD || "").trim();
 const ADMIN_LOGIN_PASSWORD_HASH = String(process.env.ADMIN_LOGIN_PASSWORD_HASH || "").trim();
