@@ -446,6 +446,22 @@ function normalizeTimeText(value) {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+function getEventTargetElement(target) {
+  if (target instanceof HTMLElement) return target;
+  if (target && typeof target === "object" && "parentElement" in target) {
+    const parent = target.parentElement;
+    if (parent instanceof HTMLElement) return parent;
+  }
+  return null;
+}
+
+function getClosestDataValue(target, attrName) {
+  if (!(target instanceof Element)) return "";
+  const el = target.closest(`[${attrName}]`);
+  if (!(el instanceof HTMLElement)) return "";
+  return normalizeText(el.getAttribute(attrName) || "");
+}
+
 function isCorrectionEditorActive() {
   const active = document.activeElement;
   return (
@@ -3729,9 +3745,9 @@ function bindMasterEvents() {
   });
 
   document.getElementById("employeeMasterBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const toggleId = target.getAttribute("data-toggle-emp");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const toggleId = getClosestDataValue(target, "data-toggle-emp");
     if (toggleId) {
       const row = state.employees.find((x) => x.id === toggleId);
       if (!row) return;
@@ -3740,7 +3756,7 @@ function bindMasterEvents() {
       syncEmployeesToServer();
       return;
     }
-    const editId = target.getAttribute("data-edit-emp");
+    const editId = getClosestDataValue(target, "data-edit-emp");
     if (editId) {
       const row = state.employees.find((x) => x.id === editId);
       if (!row) return;
@@ -3783,7 +3799,7 @@ function bindMasterEvents() {
       syncEmployeesToServer();
       return;
     }
-    const deleteId = target.getAttribute("data-delete-emp");
+    const deleteId = getClosestDataValue(target, "data-delete-emp");
     if (deleteId) {
       const row = state.employees.find((x) => x.id === deleteId);
       if (!row) return;
@@ -3807,9 +3823,9 @@ function bindMasterEvents() {
   });
 
   document.getElementById("startSiteMasterBody")?.addEventListener("click", async (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const toggleId = target.getAttribute("data-toggle-start-site");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const toggleId = getClosestDataValue(target, "data-toggle-start-site");
     if (toggleId) {
       const row = state.startSites.find((x) => x.id === toggleId);
       if (!row) return;
@@ -3817,7 +3833,7 @@ function bindMasterEvents() {
       renderAll();
       return;
     }
-    const editId = target.getAttribute("data-edit-start-site");
+    const editId = getClosestDataValue(target, "data-edit-start-site");
     if (editId) {
       const row = state.startSites.find((x) => x.id === editId);
       if (!row) return;
@@ -3848,7 +3864,7 @@ function bindMasterEvents() {
       renderAll();
       return;
     }
-    const deleteId = target.getAttribute("data-delete-start-site");
+    const deleteId = getClosestDataValue(target, "data-delete-start-site");
     if (deleteId) {
       const row = state.startSites.find((x) => x.id === deleteId);
       if (!row) return;
@@ -3866,9 +3882,9 @@ function bindMasterEvents() {
   });
 
   document.getElementById("endSiteMasterBody")?.addEventListener("click", async (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const toggleId = target.getAttribute("data-toggle-end-site");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const toggleId = getClosestDataValue(target, "data-toggle-end-site");
     if (toggleId) {
       const row = state.endSites.find((x) => x.id === toggleId);
       if (!row) return;
@@ -3876,7 +3892,7 @@ function bindMasterEvents() {
       renderAll();
       return;
     }
-    const editId = target.getAttribute("data-edit-end-site");
+    const editId = getClosestDataValue(target, "data-edit-end-site");
     if (editId) {
       const row = state.endSites.find((x) => x.id === editId);
       if (!row) return;
@@ -3907,7 +3923,7 @@ function bindMasterEvents() {
       renderAll();
       return;
     }
-    const deleteId = target.getAttribute("data-delete-end-site");
+    const deleteId = getClosestDataValue(target, "data-delete-end-site");
     if (deleteId) {
       const row = state.endSites.find((x) => x.id === deleteId);
       if (!row) return;
@@ -3963,9 +3979,9 @@ function bindMasterEvents() {
   });
 
   document.getElementById("employeeSiteLinkBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const editId = target.getAttribute("data-edit-employee-link");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const editId = getClosestDataValue(target, "data-edit-employee-link");
     if (editId) {
       const row = state.employeeSiteLinks.find((x) => x.id === editId);
       if (!row) return;
@@ -3980,7 +3996,7 @@ function bindMasterEvents() {
       setStatusBadge("employeeSiteLinkStatus", "warn", "編集中（保存で上書き）");
       return;
     }
-    const toggleId = target.getAttribute("data-toggle-employee-link");
+    const toggleId = getClosestDataValue(target, "data-toggle-employee-link");
     if (toggleId) {
       const row = state.employeeSiteLinks.find((x) => x.id === toggleId);
       if (!row) return;
@@ -3988,7 +4004,7 @@ function bindMasterEvents() {
       renderAll();
       return;
     }
-    const deleteId = target.getAttribute("data-delete-employee-link");
+    const deleteId = getClosestDataValue(target, "data-delete-employee-link");
     if (deleteId) {
       const row = state.employeeSiteLinks.find((x) => x.id === deleteId);
       if (!row) return;
@@ -4001,9 +4017,9 @@ function bindMasterEvents() {
   });
 
   document.getElementById("shiftPlanBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const editId = target.getAttribute("data-edit-shift");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const editId = getClosestDataValue(target, "data-edit-shift");
     if (editId) {
       const row = state.shiftPlans.find((s) => s.id === editId);
       if (!row) return;
@@ -4022,7 +4038,7 @@ function bindMasterEvents() {
       if (submitBtn) submitBtn.textContent = "シフト更新";
       return;
     }
-    const id = target.getAttribute("data-delete-shift");
+    const id = getClosestDataValue(target, "data-delete-shift");
     if (!id) return;
     const ok = window.confirm("このシフトを削除しますか？");
     if (!ok) return;
@@ -4088,24 +4104,26 @@ function bindMasterEvents() {
   });
 
   document.getElementById("lineUsersBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const unmapId = target.getAttribute("data-unmap-line-user");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const unmapId = getClosestDataValue(target, "data-unmap-line-user");
     if (unmapId) {
       const ok = window.confirm(`LINE userId「${unmapId}」の紐付けを解除しますか？`);
       if (!ok) return;
       unmapLineUser(unmapId);
       return;
     }
-    const userId = target.getAttribute("data-fill-line-user");
+    const fillButton = target.closest("[data-fill-line-user]");
+    if (!(fillButton instanceof HTMLElement)) return;
+    const userId = normalizeText(fillButton.getAttribute("data-fill-line-user") || "");
     if (!userId) return;
     const input = document.getElementById("lineUserIdInput");
     if (input) input.value = userId;
     const empSelect = document.getElementById("lineMapEmployee");
-    const empId = target.getAttribute("data-fill-emp-id");
+    const empId = normalizeText(fillButton.getAttribute("data-fill-emp-id") || "");
     if (empSelect && empId) empSelect.value = empId;
     const channelSelect = document.getElementById("lineMapChannel");
-    const channelId = normalizeText(target.getAttribute("data-fill-line-channel") || "");
+    const channelId = normalizeText(fillButton.getAttribute("data-fill-line-channel") || "");
     if (channelSelect && channelId && [...channelSelect.options].some((o) => normalizeText(o.value) === channelId)) {
       channelSelect.value = channelId;
     }
@@ -4114,14 +4132,14 @@ function bindMasterEvents() {
   });
 
   document.getElementById("leaveRequestBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const approveId = target.getAttribute("data-approve-leave");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const approveId = getClosestDataValue(target, "data-approve-leave");
     if (approveId) {
       approveLeaveRequest(approveId);
       return;
     }
-    const rejectId = target.getAttribute("data-reject-leave");
+    const rejectId = getClosestDataValue(target, "data-reject-leave");
     if (rejectId) rejectLeaveRequest(rejectId);
   });
 
@@ -4230,8 +4248,8 @@ function bindEvents() {
     if (!state.auth.enabled || state.auth.loggedIn) hideAdminLoginModal();
   });
   document.getElementById("adminLoginModal")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
     if (target.id === "adminLoginModal" && (!state.auth.enabled || state.auth.loggedIn)) hideAdminLoginModal();
   });
   document.getElementById("adminLoginForm")?.addEventListener("submit", async (e) => {
@@ -4397,16 +4415,16 @@ function bindEvents() {
   document.getElementById("lineCorrectionBtn")?.addEventListener("click", requestCorrectionByEmployee);
 
   document.getElementById("timecardTableBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const key = target.getAttribute("data-request-correction");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const key = getClosestDataValue(target, "data-request-correction");
     if (key) requestCorrection(key);
   });
 
   document.getElementById("pendingApprovalBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const correctionId = target.getAttribute("data-open-correction");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const correctionId = getClosestDataValue(target, "data-open-correction");
     if (!correctionId) return;
     switchView("corrections");
     const rowEl = document.getElementById(`correction-row-${correctionId}`);
@@ -4414,9 +4432,9 @@ function bindEvents() {
   });
 
   document.getElementById("correctionDeskBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const approveId = target.getAttribute("data-desk-approve");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const approveId = getClosestDataValue(target, "data-desk-approve");
     if (approveId) {
       const req = state.pendingCorrections.find((p) => p.id === approveId);
       if (req?.requestType === "overtime_review") {
@@ -4428,7 +4446,7 @@ function bindEvents() {
       approveCorrection(approveId, override);
       return;
     }
-    const rejectId = target.getAttribute("data-desk-reject");
+    const rejectId = getClosestDataValue(target, "data-desk-reject");
     if (rejectId) {
       const req = state.pendingCorrections.find((p) => p.id === rejectId);
       if (req?.requestType === "overtime_review") {
@@ -4445,10 +4463,10 @@ function bindEvents() {
   });
 
   document.getElementById("correctionDeskBody")?.addEventListener("change", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const id = target.getAttribute("data-correction-id");
-    const field = target.getAttribute("data-correction-field");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const id = getClosestDataValue(target, "data-correction-id");
+    const field = getClosestDataValue(target, "data-correction-field");
     if (!id || !field) return;
     const req = state.pendingCorrections.find((p) => p.id === id);
     if (!req) return;
@@ -4460,14 +4478,14 @@ function bindEvents() {
   });
 
   document.getElementById("behaviorReportBody")?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const reviewId = target.getAttribute("data-review-behavior");
+    const target = getEventTargetElement(e.target);
+    if (!target) return;
+    const reviewId = getClosestDataValue(target, "data-review-behavior");
     if (reviewId) {
       reviewBehaviorReport(reviewId, "review");
       return;
     }
-    const closeId = target.getAttribute("data-close-behavior");
+    const closeId = getClosestDataValue(target, "data-close-behavior");
     if (closeId) {
       reviewBehaviorReport(closeId, "close");
     }
